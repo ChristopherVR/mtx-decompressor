@@ -1,15 +1,22 @@
 # mtx-decompressor
 
 [![npm version](https://img.shields.io/npm/v/mtx-decompressor.svg)](https://www.npmjs.com/package/mtx-decompressor)
-[![license](https://img.shields.io/npm/l/mtx-decompressor.svg)](https://github.com/ChristopherVR/pptx-viewer/blob/main/LICENSE)
+[![CI](https://github.com/ChristopherVR/mtx-decompressor/actions/workflows/ci.yml/badge.svg)](https://github.com/ChristopherVR/mtx-decompressor/actions/workflows/ci.yml)
+[![license](https://img.shields.io/npm/l/mtx-decompressor.svg)](LICENSE)
 
 A zero-dependency TypeScript library that decompresses **MicroType Express (MTX)** compressed font data found inside **EOT** (Embedded OpenType) containers, producing standard **TrueType (.ttf)** font binaries.
 
-MTX is a font compression format developed by Monotype, used inside EOT containers commonly found in older web pages and embedded in Microsoft Office documents (including PPTX). This library extracts the compressed data and reconstructs a standard `.ttf` file usable with standard font APIs. It has no dependencies and works in both browser and Node.js.
+MTX is a font compression format developed by Monotype, used inside EOT containers commonly found in older web pages and embedded in Microsoft Office documents. This library extracts the compressed data and reconstructs a standard `.ttf` file usable with standard font APIs (e.g. the `FontFace` API). It has no dependencies and works in both the browser and Node.js.
 
-<samp>**[📦 npm](https://www.npmjs.com/package/mtx-decompressor)** · **[📖 Full docs](https://christophervr.github.io/pptx-viewer/)**</samp>
+<samp>**[▶️ Live demo](https://christophervr.github.io/mtx-decompressor/)** · **[📦 npm](https://www.npmjs.com/package/mtx-decompressor)**</samp>
 
 ---
+
+## Demo
+
+Try it right in your browser — drop in an `.eot` file, download the extracted `.ttf`, and preview text rendered in the decompressed font:
+
+**https://christophervr.github.io/mtx-decompressor/**
 
 ## Install
 
@@ -59,7 +66,7 @@ The exported `SFNTContainer` and `SFNTTable` types describe the reconstructed fo
 
 ## How it works
 
-The pipeline: optional XOR decryption → MTX header parsing (splits into three LZCOMP blocks) → LZCOMP decompression (sliding-window LZ with adaptive Huffman coding) → CTF parsing (reconstructs TrueType tables from the three Compact TrueType Font streams) → SFNT assembly (table directory, alignment, checksums). See the [full documentation](https://christophervr.github.io/pptx-viewer/) for the format details.
+The pipeline: optional XOR decryption → MTX header parsing (splits into three LZCOMP blocks) → LZCOMP decompression (sliding-window LZ with adaptive Huffman coding) → CTF parsing (reconstructs TrueType tables from the three Compact TrueType Font streams) → SFNT assembly (table directory, alignment, checksums).
 
 ## Provenance
 
@@ -67,4 +74,4 @@ A TypeScript port of the MTX decompression code from [libeot](https://github.com
 
 ## License
 
-[Apache-2.0](LICENSE). Please keep the [`NOTICE`](NOTICE) file with redistributions.
+[MPL-2.0](LICENSE). As a TypeScript port of the MPL-2.0-licensed libeot, this library inherits the Mozilla Public License 2.0 — modifications to the licensed files must remain open under the same terms.
