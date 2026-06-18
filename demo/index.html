@@ -1,0 +1,368 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>mtx-decompressor — MicroType Express font decompressor</title>
+		<meta
+			name="description"
+			content="A zero-dependency TypeScript library that decompresses MicroType Express (MTX) font data from EOT containers into standard TrueType (.ttf) fonts. Try it live in your browser."
+		/>
+		<!-- All assets use relative paths: the site is served from the /mtx-decompressor/ subpath. -->
+		<style>
+			:root {
+				--bg: #0f1115;
+				--panel: #181b22;
+				--panel-2: #1f232c;
+				--border: #2a2f3a;
+				--text: #e7e9ee;
+				--muted: #9aa3b2;
+				--accent: #7c9cff;
+				--accent-2: #5ad1a8;
+				--danger: #ff7b7b;
+				--mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+			}
+			* {
+				box-sizing: border-box;
+			}
+			html {
+				scroll-behavior: smooth;
+			}
+			body {
+				margin: 0;
+				background: radial-gradient(1200px 600px at 80% -10%, #1b2230 0%, var(--bg) 55%);
+				color: var(--text);
+				font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+				-webkit-font-smoothing: antialiased;
+			}
+			a {
+				color: var(--accent);
+			}
+			.wrap {
+				max-width: 880px;
+				margin: 0 auto;
+				padding: 2.5rem 1.25rem 5rem;
+			}
+			header.hero {
+				text-align: center;
+				padding: 2rem 0 1rem;
+			}
+			.hero h1 {
+				font-size: clamp(2rem, 5vw, 3rem);
+				margin: 0 0 0.5rem;
+				letter-spacing: -0.02em;
+			}
+			.hero .tag {
+				color: var(--muted);
+				font-size: 1.1rem;
+				max-width: 34rem;
+				margin: 0 auto 1.25rem;
+			}
+			.badges {
+				display: flex;
+				gap: 0.5rem;
+				justify-content: center;
+				flex-wrap: wrap;
+				margin-bottom: 1rem;
+			}
+			.badge {
+				font-family: var(--mono);
+				font-size: 0.8rem;
+				color: var(--accent-2);
+				border: 1px solid var(--border);
+				border-radius: 999px;
+				padding: 0.2rem 0.7rem;
+				background: var(--panel);
+			}
+			section {
+				background: var(--panel);
+				border: 1px solid var(--border);
+				border-radius: 14px;
+				padding: 1.5rem;
+				margin: 1.5rem 0;
+			}
+			h2 {
+				margin-top: 0;
+				font-size: 1.3rem;
+				letter-spacing: -0.01em;
+			}
+			pre,
+			code {
+				font-family: var(--mono);
+				font-size: 0.88rem;
+			}
+			pre {
+				background: var(--panel-2);
+				border: 1px solid var(--border);
+				border-radius: 10px;
+				padding: 1rem;
+				overflow-x: auto;
+				margin: 0.75rem 0 0;
+			}
+			code.inline {
+				background: var(--panel-2);
+				border: 1px solid var(--border);
+				border-radius: 6px;
+				padding: 0.1rem 0.4rem;
+			}
+			.muted {
+				color: var(--muted);
+			}
+			ol.steps {
+				padding-left: 1.2rem;
+				margin: 0;
+			}
+			ol.steps li {
+				margin: 0.4rem 0;
+			}
+
+			/* ---- Interactive demo ---- */
+			#drop-zone {
+				display: flex;
+				flex-direction: column;
+				align-items: center;
+				justify-content: center;
+				gap: 0.5rem;
+				border: 2px dashed var(--border);
+				border-radius: 12px;
+				padding: 2.5rem 1.5rem;
+				text-align: center;
+				cursor: pointer;
+				transition: border-color 0.15s, background 0.15s;
+			}
+			#drop-zone:hover,
+			#drop-zone[data-dragging="true"] {
+				border-color: var(--accent);
+				background: var(--panel-2);
+			}
+			#drop-zone strong {
+				font-size: 1.05rem;
+			}
+			#drop-zone .hint {
+				color: var(--muted);
+				font-size: 0.9rem;
+			}
+			#file-input {
+				position: absolute;
+				width: 1px;
+				height: 1px;
+				opacity: 0;
+				pointer-events: none;
+			}
+			#status {
+				margin-top: 1rem;
+				padding: 0.75rem 1rem;
+				border-radius: 10px;
+				font-size: 0.95rem;
+				border: 1px solid var(--border);
+				background: var(--panel-2);
+			}
+			#status[data-kind="busy"] {
+				border-color: var(--accent);
+			}
+			#status[data-kind="ok"] {
+				border-color: var(--accent-2);
+				color: var(--accent-2);
+			}
+			#status[data-kind="error"] {
+				border-color: var(--danger);
+				color: var(--danger);
+			}
+			#result {
+				margin-top: 1.25rem;
+			}
+			dl#metrics {
+				display: grid;
+				grid-template-columns: max-content 1fr;
+				gap: 0.4rem 1.25rem;
+				margin: 0 0 1.25rem;
+			}
+			dl#metrics dt {
+				color: var(--muted);
+			}
+			dl#metrics dd {
+				margin: 0;
+				font-family: var(--mono);
+				font-size: 0.9rem;
+				word-break: break-word;
+			}
+			.btn {
+				display: inline-block;
+				background: var(--accent);
+				color: #0b0d12;
+				font-weight: 600;
+				text-decoration: none;
+				padding: 0.6rem 1.1rem;
+				border-radius: 10px;
+			}
+			.btn:hover {
+				filter: brightness(1.08);
+			}
+			#sample {
+				margin-top: 1.25rem;
+				padding: 1.25rem;
+				border: 1px solid var(--border);
+				border-radius: 10px;
+				background: #fff;
+				color: #111;
+				font-size: 1.6rem;
+				line-height: 1.4;
+				word-break: break-word;
+			}
+			#sample .small {
+				font-size: 1rem;
+			}
+			footer {
+				text-align: center;
+				color: var(--muted);
+				font-size: 0.85rem;
+				margin-top: 2rem;
+			}
+		</style>
+	</head>
+	<body>
+		<div class="wrap">
+			<header class="hero">
+				<h1>mtx-decompressor</h1>
+				<p class="tag">
+					Zero-dependency TypeScript that decompresses <strong>MicroType Express (MTX)</strong>
+					font data from <strong>EOT</strong> containers into standard
+					<strong>TrueType (.ttf)</strong> fonts — in the browser or Node.
+				</p>
+				<div class="badges">
+					<span class="badge">zero dependencies</span>
+					<span class="badge">runs client-side</span>
+					<span class="badge">MPL-2.0</span>
+				</div>
+				<p>
+					<a href="https://www.npmjs.com/package/mtx-decompressor">npm</a>
+					&nbsp;·&nbsp;
+					<a href="https://github.com/ChristopherVR/mtx-decompressor">GitHub</a>
+				</p>
+			</header>
+
+			<section id="about">
+				<h2>What is this?</h2>
+				<p>
+					MTX is a font-compression format from Monotype used inside EOT (Embedded
+					OpenType) containers — common in older web pages and embedded in Microsoft
+					Office documents (including PPTX). <code class="inline">mtx-decompressor</code>
+					unpacks that compressed data and reconstructs a standard
+					<code class="inline">.ttf</code> file you can use with any normal font API. It
+					has no runtime dependencies and works entirely in the browser.
+				</p>
+			</section>
+
+			<section id="install">
+				<h2>Install</h2>
+				<pre><code>npm i mtx-decompressor</code></pre>
+				<h2 style="margin-top: 1.5rem">Usage</h2>
+				<pre><code>import { decompressMtx, decompressEotFont } from 'mtx-decompressor';
+
+// `fontData` is the MTX blob extracted from an EOT container (Uint8Array).
+const ttfBytes = decompressMtx(fontData, { compressed: true, encrypted: false });
+// => Uint8Array containing a valid TrueType font
+
+// Convenience wrapper with explicit booleans: (fontData, compressed, encrypted)
+const ttf = decompressEotFont(fontData, true, false);
+
+// In the browser, register the recovered font and use it:
+const face = new FontFace('MyFont', ttfBytes.buffer);
+await face.load();
+document.fonts.add(face);</code></pre>
+				<p class="muted" style="margin-bottom: 0">
+					Note: the library operates on the MTX font blob <em>inside</em> the EOT
+					container. The live demo below includes a small EOT-header parser to locate that
+					blob and read its compression/encryption flags before calling
+					<code class="inline">decompressMtx</code>.
+				</p>
+			</section>
+
+			<section id="demo">
+				<h2>Try it live</h2>
+				<p class="muted">
+					Pick or drop an <code class="inline">.eot</code> file. Everything runs locally
+					in your browser — nothing is uploaded.
+				</p>
+
+				<label id="drop-zone" for="file-input">
+					<strong>Drop an .eot file here</strong>
+					<span class="hint">or click to choose a file</span>
+				</label>
+				<input id="file-input" type="file" accept=".eot,application/vnd.ms-fontobject" />
+
+				<div id="status" data-kind="idle">Choose an .eot file to begin.</div>
+
+				<div id="result" hidden>
+					<dl id="metrics"></dl>
+					<a id="download" class="btn" href="#">Download .ttf</a>
+
+					<div id="sample">
+						The quick brown fox jumps over the lazy dog.
+						<div class="small">0123456789 — ABCDEFGHIJKLM nopqrstuvwxyz</div>
+					</div>
+					<p class="muted" style="font-size: 0.85rem">
+						The sample above is rendered using the recovered font via the
+						<code class="inline">FontFace</code> API.
+					</p>
+				</div>
+			</section>
+
+			<section id="how">
+				<h2>How it works</h2>
+				<ol class="steps">
+					<li>Optional XOR decryption (key <code class="inline">0x50</code>).</li>
+					<li>
+						MTX header parsing — splits the blob into three LZCOMP-compressed blocks.
+					</li>
+					<li>
+						LZCOMP decompression — sliding-window LZ with adaptive Huffman coding.
+					</li>
+					<li>
+						CTF parsing — reconstructs TrueType tables from the three Compact TrueType
+						Font streams (glyph data, push instructions, hinting code).
+					</li>
+					<li>SFNT assembly — table directory, 4-byte alignment, and checksums.</li>
+				</ol>
+			</section>
+
+			<section id="examples">
+				<h2>Examples</h2>
+				<p>
+					The <a href="#demo">live demo above</a> <em>is</em> the example: it reads an EOT
+					file, calls <code class="inline">decompressMtx</code>, and renders the recovered
+					font. The equivalent code, end to end:
+				</p>
+				<pre><code>// 1. Read the EOT file as bytes (e.g. from a file input).
+const buffer = await file.arrayBuffer();
+const view = new DataView(buffer);
+
+// 2. EOT header (little-endian): locate the trailing font blob + flags.
+const eotSize = view.getUint32(0, true);
+const fontDataSize = view.getUint32(4, true);
+const flags = view.getUint32(12, true);
+const fontData = new Uint8Array(buffer, eotSize - fontDataSize, fontDataSize);
+
+// 3. Decompress with the library.
+const ttf = decompressMtx(fontData, {
+  compressed: (flags & 0x00000004) !== 0, // TTEMBED_TTCOMPRESSED
+  encrypted: (flags & 0x10000000) !== 0,  // TTEMBED_XORENCRYPTDATA
+});
+
+// 4. Use it: download, or register via FontFace.
+const url = URL.createObjectURL(new Blob([ttf], { type: 'font/ttf' }));</code></pre>
+			</section>
+
+			<footer>
+				<p>
+					A TypeScript port of the MTX decompression code from
+					<a href="https://github.com/umanwizard/libeot">libeot</a> (MPL-2.0). Based on the
+					<a href="http://www.w3.org/Submission/MTX/">MicroType Express specification</a>.
+				</p>
+			</footer>
+		</div>
+
+		<!-- Relative path: bundled by the Pages workflow into site/main.js -->
+		<script type="module" src="./main.js"></script>
+	</body>
+</html>
