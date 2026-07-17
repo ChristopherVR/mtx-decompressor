@@ -129,6 +129,12 @@ describe('stream', () => {
 			expect(s.buf[2]).toBe(0xef);
 		});
 
+		it('writeU24 rejects values that do not fit in 24 bits', () => {
+			const s = new Stream(null, 0);
+			expect(() => s.writeU24(0x1000000)).toThrow('out of range');
+			expect(() => s.writeU24(-1)).toThrow('out of range');
+		});
+
 		it('writeU32 writes big-endian 32-bit', () => {
 			const s = new Stream(null, 0);
 			s.writeU32(0xdeadbeef);
@@ -304,6 +310,23 @@ describe('stream', () => {
 			s.pos = 3;
 			s.checksumU32(0, 8);
 			expect(s.pos).toBe(3);
+		});
+
+		it('bounds on endPos, not size, for an unaligned range', () => {
+			// 8 valid bytes, but checksum only the first 6. The final (partial)
+			// word must be [b4, b5, 0, 0] — bytes 6 and 7 must NOT be folded in.
+			const s = new Stream(
+				new Uint8Array([0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0xff, 0xff]),
+				8,
+			);
+			const expected = ((0x01020304 + 0x05060000) >>> 0) >>> 0;
+			expect(s.checksumU32(0, 6)).toBe(expected);
+		});
+
+		it('rejects an out-of-range span', () => {
+			const s = new Stream(new Uint8Array(8), 8);
+			expect(() => s.checksumU32(4, 2)).toThrow();
+			expect(() => s.checksumU32(0, 12)).toThrow();
 		});
 	});
 

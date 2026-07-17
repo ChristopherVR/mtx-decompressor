@@ -115,13 +115,18 @@ export function decompressMtx(
 			data[i] = fontData[i] ^ ENCRYPTION_KEY;
 		}
 	} else {
-		// Work on a copy so we don't mutate the caller's buffer.
+		// Alias the caller's buffer — the decompression path only reads from it,
+		// never writes. (On the uncompressed passthrough below we hand back an
+		// owned copy so the caller's array is never returned as our output.)
 		data = fontData;
 	}
 
 	// --- Early exit when not compressed ------------------------------------
 	if (!compressed) {
-		return data;
+		// Return an owned buffer, matching libeot (writeFontFile.c always copies).
+		// The encrypted branch already allocated a fresh array; the aliased
+		// branch must be copied so we never return the caller's own buffer.
+		return encrypted ? data : data.slice();
 	}
 
 	// --- Unpack 3 LZCOMP streams ------------------------------------------

@@ -40,6 +40,14 @@ describe('decompressMtx', () => {
 		expect(input).toStrictEqual(inputCopy);
 	});
 
+	it('passthrough returns an owned copy, not the caller buffer', () => {
+		const input = new Uint8Array([0xaa, 0xbb, 0xcc]);
+		const result = decompressMtx(input, { compressed: false, encrypted: false });
+		// Mutating the result must not write back into the caller's array.
+		result[0] = 0x00;
+		expect(input[0]).toBe(0xaa);
+	});
+
 	it('defaults to compressed=true', () => {
 		// With no options, compressed defaults to true.
 		// A tiny buffer will fail decompression.

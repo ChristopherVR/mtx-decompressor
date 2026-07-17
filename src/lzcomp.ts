@@ -8,6 +8,7 @@
 
 import { AHuff } from './ahuff';
 import { BitIO } from './bitio';
+import { EotError, EotErrorCode } from './errors';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -350,7 +351,11 @@ export function lzcompDecompress(data: Uint8Array, size: number, version: number
 	};
 
 	// --- Main decode loop --------------------------------------------------
-	for (let pos = 0; pos < outLen; ) {
+	// `pos` is hoisted so the post-loop bounds check can inspect its final
+	// value: the copy branch advances `pos` without re-testing the loop
+	// condition, so a corrupt stream can drive it past `outLen`.
+	let pos = 0;
+	for (; pos < outLen; ) {
 		const symbol = symEcoder.readSymbol();
 
 		let value: number;
@@ -392,6 +397,16 @@ export function lzcompDecompress(data: Uint8Array, size: number, version: number
 		win[base + pos] = value;
 		pos++;
 		emitByte(value);
+	}
+
+	// A well-formed stream lands exactly on `outLen`. A final copy item can
+	// overshoot; libeot raises ERR_LZCOMP_Decode_bounds here rather than
+	// returning the trailing garbage the overshoot produced.
+	if (pos !== outLen) {
+		throw new EotError(
+			EotErrorCode.MtxError,
+			`LZCOMP decode overran output: pos=${pos}, expected=${outLen}`,
+		);
 	}
 
 	return outBuf.subarray(0, outIdx);

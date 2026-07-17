@@ -114,6 +114,12 @@ describe('bitIO', () => {
 			expect(bio.readValue(16)).toBe(0x1234);
 		});
 
+		it('returns an unsigned result for a full 32-bit read', () => {
+			const bio = new BitIO(new Uint8Array([0xff, 0xff, 0xff, 0xff]));
+			// Must be 4294967295, not -1 (JS left-shift is signed).
+			expect(bio.readValue(32)).toBe(0xffffffff);
+		});
+
 		it('reads multiple values sequentially', () => {
 			// 0b11001010 = 0xCA
 			const bio = new BitIO(new Uint8Array([0xca]));
