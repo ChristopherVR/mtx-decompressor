@@ -1,15 +1,62 @@
 import { describe, it, expect } from 'vitest';
 
 import { parseCTF } from './ctf-parser';
+import { EotError, EotErrorCode } from './errors';
 import { Stream } from './stream';
+
+/** Minimal 54-byte `head` table (indexToLocFormat lives at offset 50). */
+function minimalHead(): Uint8Array {
+	return new Uint8Array(54);
+}
+
+/** Minimal 32-byte `maxp` v1.0 table with numGlyphs = 0. */
+function minimalMaxp(): Uint8Array {
+	const s = new Stream(null, 0);
+	s.reserve(32);
+	s.writeU32(0x00010000); // version 1.0
+	for (let i = 0; i < 14; i++) {
+		s.writeU16(0); // numGlyphs + the 13 v1.0 limit fields
+	}
+	return s.toUint8Array();
+}
+
+/**
+ * Ensure the structural tables parseCTF requires (head, maxp, hmtx) are
+ * present, injecting minimal versions for any the caller did not supply.
+ */
+function withRequiredTables(
+	tables: { tag: string; data: Uint8Array }[],
+): { tag: string; data: Uint8Array }[] {
+	const have = new Set(tables.map((t) => t.tag));
+	const result = [...tables];
+	if (!have.has('head')) {
+		result.push({ tag: 'head', data: minimalHead() });
+	}
+	if (!have.has('maxp')) {
+		result.push({ tag: 'maxp', data: minimalMaxp() });
+	}
+	if (!have.has('hmtx')) {
+		result.push({ tag: 'hmtx', data: new Uint8Array([0, 0, 0, 0]) });
+	}
+	return result;
+}
 
 /**
  * Build a minimal CTF stream[0] that contains an SFNT header and
- * table directory, plus the raw table data.
+ * table directory, plus the raw table data. The structural tables required
+ * by parseCTF (head, maxp, hmtx) are injected automatically when absent.
  *
  * This is a helper for constructing test inputs for parseCTF.
  */
-function buildMinimalCTFStream0(tables: { tag: string; data: Uint8Array }[]): Stream {
+function buildMinimalCTFStream0(inputTables: { tag: string; data: Uint8Array }[]): Stream {
+	return buildRawCTFStream0(withRequiredTables(inputTables));
+}
+
+/**
+ * Build a CTF stream[0] from exactly the given tables, with no injection of
+ * required structural tables. Use this to exercise the missing-table guards.
+ */
+function buildRawCTFStream0(tables: { tag: string; data: Uint8Array }[]): Stream {
 	const s = new Stream(null, 0);
 
 	// --- SFNT offset table (12 bytes) ---
@@ -59,10 +106,10 @@ describe('parseCTF', () => {
 
 		const container = parseCTF([s0, s1, s2]);
 
-		expect(container.tables).toHaveLength(1);
-		expect(container.tables[0].tag).toBe('name');
-		expect(container.tables[0].bufSize).toBe(4);
-		expect(container.tables[0].buf).toStrictEqual(tableData);
+		const name = container.tables.find((t) => t.tag === 'name')!;
+		expect(name).toBeDefined();
+		expect(name.bufSize).toBe(4);
+		expect(name.buf).toStrictEqual(tableData);
 	});
 
 	it('parses multiple tables', () => {
@@ -77,73 +124,32 @@ describe('parseCTF', () => {
 
 		const container = parseCTF([s0, s1, s2]);
 
-		expect(container.tables).toHaveLength(3);
-		expect(container.tables[0].tag).toBe('name');
-		expect(container.tables[1].tag).toBe('post');
-		expect(container.tables[2].tag).toBe('OS/2');
+		expect(container.tables.find((t) => t.tag === 'name')).toBeDefined();
+		expect(container.tables.find((t) => t.tag === 'post')).toBeDefined();
+		expect(container.tables.find((t) => t.tag === 'OS/2')).toBeDefined();
 	});
 
 	// -----------------------------------------------------------------------
 	// hdmx and VDMX table skipping
 	// -----------------------------------------------------------------------
 	it('skips hdmx tables', () => {
-		const s = new Stream(null, 0);
-		s.writeU32(0x00010000); // scalarType
-		s.writeU16(2); // numTables
-		s.writeU16(0);
-		s.writeU16(0);
-		s.writeU16(0);
+		const s0 = buildMinimalCTFStream0([
+			{ tag: 'hdmx', data: new Uint8Array(50) },
+			{ tag: 'name', data: new Uint8Array([0xaa, 0xbb]) },
+		]);
+		const container = parseCTF([s0, new Stream(null, 0), new Stream(null, 0)]);
 
-		// Table 1: hdmx (should be skipped)
-		for (const c of 'hdmx') {
-			s.writeU8(c.charCodeAt(0));
-		}
-		s.writeU32(0); // checksum
-		s.writeU32(100); // offset
-		s.writeU32(50); // size
-
-		// Table 2: name
-		const nameOffset = 12 + 2 * 16;
-		const nameData = new Uint8Array([0xaa, 0xbb]);
-		for (const c of 'name') {
-			s.writeU8(c.charCodeAt(0));
-		}
-		s.writeU32(0);
-		s.writeU32(nameOffset);
-		s.writeU32(nameData.length);
-
-		// Write name data
-		s.seekAbsoluteThroughReserve(nameOffset);
-		for (let i = 0; i < nameData.length; i++) {
-			s.writeU8(nameData[i]);
-		}
-
-		s.seekAbsolute(0);
-		const container = parseCTF([s, new Stream(null, 0), new Stream(null, 0)]);
-
-		// Only the name table should be present (hdmx skipped)
-		expect(container.tables).toHaveLength(1);
-		expect(container.tables[0].tag).toBe('name');
+		// hdmx is dropped; name survives.
+		expect(container.tables.find((t) => t.tag === 'hdmx')).toBeUndefined();
+		const name = container.tables.find((t) => t.tag === 'name')!;
+		expect(name).toBeDefined();
+		expect(name.buf).toStrictEqual(new Uint8Array([0xaa, 0xbb]));
 	});
 
 	it('skips VDMX tables', () => {
-		const s = new Stream(null, 0);
-		s.writeU32(0x00010000);
-		s.writeU16(1); // numTables: just VDMX
-		s.writeU16(0);
-		s.writeU16(0);
-		s.writeU16(0);
-
-		for (const c of 'VDMX') {
-			s.writeU8(c.charCodeAt(0));
-		}
-		s.writeU32(0);
-		s.writeU32(100);
-		s.writeU32(50);
-
-		s.seekAbsolute(0);
-		const container = parseCTF([s, new Stream(null, 0), new Stream(null, 0)]);
-		expect(container.tables).toHaveLength(0);
+		const s0 = buildMinimalCTFStream0([{ tag: 'VDMX', data: new Uint8Array(50) }]);
+		const container = parseCTF([s0, new Stream(null, 0), new Stream(null, 0)]);
+		expect(container.tables.find((t) => t.tag === 'VDMX')).toBeUndefined();
 	});
 
 	// -----------------------------------------------------------------------
@@ -186,7 +192,7 @@ describe('parseCTF', () => {
 	// -----------------------------------------------------------------------
 	// Empty container
 	// -----------------------------------------------------------------------
-	it('handles a container with zero tables', () => {
+	it('rejects a container with zero tables (no required tables present)', () => {
 		const s = new Stream(null, 0);
 		s.writeU32(0x00010000);
 		s.writeU16(0); // 0 tables
@@ -195,8 +201,11 @@ describe('parseCTF', () => {
 		s.writeU16(0);
 		s.seekAbsolute(0);
 
-		const container = parseCTF([s, new Stream(null, 0), new Stream(null, 0)]);
-		expect(container.tables).toHaveLength(0);
+		// A font with no tables is missing maxp/head/hmtx — parseCTF must reject
+		// it rather than return an empty container.
+		expect(() => parseCTF([s, new Stream(null, 0), new Stream(null, 0)])).toThrow(
+			/missing a maxp table/,
+		);
 	});
 
 	// -----------------------------------------------------------------------
@@ -211,10 +220,60 @@ describe('parseCTF', () => {
 		const s0 = buildMinimalCTFStream0([{ tag: 'cmap', data }]);
 		const container = parseCTF([s0, new Stream(null, 0), new Stream(null, 0)]);
 
-		const cmap = container.tables[0];
+		const cmap = container.tables.find((t) => t.tag === 'cmap')!;
+		expect(cmap).toBeDefined();
 		expect(cmap.bufSize).toBe(256);
 		for (let i = 0; i < 256; i++) {
 			expect(cmap.buf[i]).toBe(i);
+		}
+	});
+
+	// -----------------------------------------------------------------------
+	// Structural validity guards (ported from libeot parseCTF.c)
+	// -----------------------------------------------------------------------
+	const empty = () => new Stream(null, 0);
+
+	it('throws EotError NoMaxpTable when maxp is absent', () => {
+		// head + hmtx present, maxp deliberately omitted (raw builder — no injection).
+		const s0 = buildRawCTFStream0([
+			{ tag: 'head', data: minimalHead() },
+			{ tag: 'hmtx', data: new Uint8Array([0, 0, 0, 0]) },
+		]);
+		try {
+			parseCTF([s0, empty(), empty()]);
+			expect.fail('expected parseCTF to throw for missing maxp');
+		} catch (e) {
+			expect(e).toBeInstanceOf(EotError);
+			expect((e as EotError).code).toBe(EotErrorCode.NoMaxpTable);
+		}
+	});
+
+	it('throws EotError NoHmtxTable when hmtx is absent', () => {
+		const s0 = buildRawCTFStream0([
+			{ tag: 'head', data: minimalHead() },
+			{ tag: 'maxp', data: minimalMaxp() },
+		]);
+		try {
+			parseCTF([s0, empty(), empty()]);
+			expect.fail('expected parseCTF to throw for missing hmtx');
+		} catch (e) {
+			expect(e).toBeInstanceOf(EotError);
+			expect((e as EotError).code).toBe(EotErrorCode.NoHmtxTable);
+		}
+	});
+
+	it('throws EotError MalformedHeadTable for a head table shorter than 12 bytes', () => {
+		const s0 = buildRawCTFStream0([
+			{ tag: 'head', data: new Uint8Array(8) },
+			{ tag: 'maxp', data: minimalMaxp() },
+			{ tag: 'hmtx', data: new Uint8Array([0, 0, 0, 0]) },
+		]);
+		try {
+			parseCTF([s0, empty(), empty()]);
+			expect.fail('expected parseCTF to throw for a short head table');
+		} catch (e) {
+			expect(e).toBeInstanceOf(EotError);
+			expect((e as EotError).code).toBe(EotErrorCode.MalformedHeadTable);
 		}
 	});
 });

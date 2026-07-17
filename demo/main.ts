@@ -11,77 +11,11 @@
  * demo always tracks the real, current public API.
  */
 
-import { decompressMtx } from '../src/index';
+import { decompressMtx, parseEotMetadata, type EotMetadata } from '../src/index';
 
-// ---------------------------------------------------------------------------
-// EOT container parsing (demo-side helper)
-// ---------------------------------------------------------------------------
-//
-// IMPORTANT: the `mtx-decompressor` library operates on the *MTX font blob*
-// that lives inside an EOT container — it does not parse the EOT header
-// itself. To make this demo accept a real `.eot` file, we parse the minimal
-// EOT header here (in the demo, not the library) to locate the embedded font
-// bytes and read the compression/encryption flags.
-//
-// EOT layout (little-endian, see the W3C EOT submission / Microsoft spec):
-//   offset 0 : EOTSize        U32  total file size in bytes
-//   offset 4 : FontDataSize   U32  size of the embedded font data block
-//   offset 8 : Version        U32
-//   offset 12: Flags          U32  (TTEMBED_* bit flags)
-//   ...       variable-length metadata fields (family name, etc.)
-//   end      : FontData       FontDataSize bytes at (EOTSize - FontDataSize)
-
-/** Flag bit: the embedded font data is MTX-compressed. */
-const TTEMBED_TTCOMPRESSED = 0x00000004;
-/** Flag bit: the embedded font data is XOR-obfuscated (key 0x50). */
-const TTEMBED_XORENCRYPTDATA = 0x10000000;
-
-interface EotFont {
-	/** Raw MTX font blob extracted from the tail of the EOT file. */
-	fontData: Uint8Array;
-	/** Whether the blob is MTX-compressed (per EOT flags). */
-	compressed: boolean;
-	/** Whether the blob is XOR-encrypted (per EOT flags). */
-	encrypted: boolean;
-}
-
-/**
- * Parse an EOT container and return the embedded font blob plus its
- * compression/encryption flags. Throws with a readable message on malformed
- * input.
- */
-function parseEot(buffer: ArrayBuffer): EotFont {
-	if (buffer.byteLength < 16) {
-		throw new Error('File too small to be a valid EOT container (need at least 16 bytes).');
-	}
-
-	const view = new DataView(buffer);
-	const eotSize = view.getUint32(0, true);
-	const fontDataSize = view.getUint32(4, true);
-	const flags = view.getUint32(12, true);
-
-	if (fontDataSize === 0 || fontDataSize > buffer.byteLength) {
-		throw new Error(
-			`EOT FontDataSize (${fontDataSize}) is out of range for a ${buffer.byteLength}-byte file. This may not be an EOT file.`,
-		);
-	}
-
-	// The font data sits at the tail of the file. Prefer EOTSize when it is
-	// consistent with the actual byte length; otherwise fall back to the real
-	// length so we still locate the trailing blob.
-	const total = eotSize === buffer.byteLength ? eotSize : buffer.byteLength;
-	const start = total - fontDataSize;
-	if (start < 16) {
-		throw new Error('EOT font-data offset overlaps the header — file appears malformed.');
-	}
-
-	const fontData = new Uint8Array(buffer, start, fontDataSize);
-	return {
-		fontData,
-		compressed: (flags & TTEMBED_TTCOMPRESSED) !== 0,
-		encrypted: (flags & TTEMBED_XORENCRYPTDATA) !== 0,
-	};
-}
+// The library now parses the EOT container itself (see `parseEotMetadata`),
+// including the version-retry logic real-world files need — so the demo no
+// longer carries its own tail-guessing heuristic.
 
 // ---------------------------------------------------------------------------
 // sfnt / version sniffing for the output font
@@ -205,23 +139,24 @@ async function handleFile(file: File): Promise<void> {
 		return;
 	}
 
-	// 1. Locate the embedded font blob inside the EOT container.
-	let eot: EotFont;
+	// 1. Parse the EOT container header to locate the font blob and its flags.
+	let meta: EotMetadata;
 	try {
-		eot = parseEot(buffer);
+		meta = parseEotMetadata(new Uint8Array(buffer));
 	} catch (err) {
 		setStatus((err as Error).message, 'error');
 		return;
 	}
+	const fontData = new Uint8Array(buffer, meta.fontDataOffset, meta.fontDataSize);
 
 	// 2. Decompress with the library, timing the call.
 	let ttf: Uint8Array;
 	let elapsedMs: number;
 	try {
 		const t0 = performance.now();
-		ttf = decompressMtx(eot.fontData, {
-			compressed: eot.compressed,
-			encrypted: eot.encrypted,
+		ttf = decompressMtx(fontData, {
+			compressed: meta.compressed,
+			encrypted: meta.encrypted,
 		});
 		elapsedMs = performance.now() - t0;
 	} catch (err) {
@@ -230,13 +165,15 @@ async function handleFile(file: File): Promise<void> {
 	}
 
 	// 3. Report metrics.
-	const ratio = ttf.length > 0 ? eot.fontData.length / ttf.length : 0;
+	const ratio = ttf.length > 0 ? fontData.length / ttf.length : 0;
+	const fontLabel = meta.fullName || meta.familyName || 'n/a';
 	showMetrics([
 		['Source file', `${file.name} (${formatBytes(buffer.byteLength)})`],
-		['MTX blob (input)', formatBytes(eot.fontData.length)],
+		['Font name', `${fontLabel} (EOT v${meta.version}${meta.badVersion ? ', corrected' : ''})`],
+		['MTX blob (input)', formatBytes(fontData.length)],
 		['TrueType (output)', formatBytes(ttf.length)],
 		['Compression ratio', `${(ratio * 100).toFixed(1)}% of output`],
-		['EOT flags', `compressed=${eot.compressed}, encrypted=${eot.encrypted}`],
+		['EOT flags', `compressed=${meta.compressed}, encrypted=${meta.encrypted}`],
 		['sfnt version', describeSfntVersion(ttf) ?? 'n/a'],
 		['Glyph count', readNumGlyphs(ttf)?.toString() ?? 'n/a'],
 		['Decompress time', `${elapsedMs.toFixed(2)} ms`],
