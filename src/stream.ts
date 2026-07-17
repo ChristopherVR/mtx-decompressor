@@ -2,6 +2,8 @@
  * Binary stream reader/writer for big-endian data.
  * Ported from libeot (MPL 2.0) util/stream.c
  */
+import { EotError, EotErrorCode } from './errors';
+
 export class Stream {
 	buf: Uint8Array;
 	size: number; // how much data has been written or is valid
@@ -41,7 +43,27 @@ export class Stream {
 		this.reserved = n;
 	}
 
+	/**
+	 * Reject byte-level access while the stream sits mid-byte (`bitPos != 0`).
+	 *
+	 * libeot returns `EOT_OFF_BYTE_BOUNDARY` for any byte read/write/seek issued
+	 * before a partial byte has been consumed. The bit-level reader
+	 * ({@link readNBits}) is the sole legitimate mid-byte accessor and bypasses
+	 * this guard by touching `buf`/`pos` directly. On valid input the only
+	 * `readNBits` caller consumes whole bytes per point, so the stream is always
+	 * byte-aligned when a byte accessor runs and this guard never fires.
+	 */
+	private ensureByteAligned(): void {
+		if (this.bitPos !== 0) {
+			throw new EotError(
+				EotErrorCode.OffByteBoundary,
+				`Stream: byte-level access at a non-byte boundary (bitPos=${this.bitPos}, pos=${this.pos})`,
+			);
+		}
+	}
+
 	private ensureWrite(n: number): void {
+		this.ensureByteAligned();
 		const needed = this.pos + n;
 		if (needed > this.reserved) {
 			this.reserve(Math.max(needed, this.reserved * 2 || 256));
@@ -52,6 +74,7 @@ export class Stream {
 	}
 
 	private ensureRead(n: number): void {
+		this.ensureByteAligned();
 		if (this.pos + n > this.size) {
 			throw new Error(
 				`Stream: not enough data (need ${n} bytes at pos ${this.pos}, size ${this.size})`,
@@ -60,15 +83,19 @@ export class Stream {
 	}
 
 	// --- Seek ---
+	// A seek requires the stream to be byte-aligned and never clears `bitPos`
+	// itself (mirroring libeot, which refuses to seek mid-byte rather than
+	// silently re-aligning). The alignment guard leaves `bitPos` at 0.
 	seekAbsolute(pos: number): void {
+		this.ensureByteAligned();
 		if (pos > this.size) {
 			throw new Error(`Stream: seek past end (${pos} > ${this.size})`);
 		}
 		this.pos = pos;
-		this.bitPos = 0;
 	}
 
 	seekRelative(offset: number): void {
+		this.ensureByteAligned();
 		const newPos = this.pos + offset;
 		if (newPos < 0) {
 			throw new Error('Stream: negative seek');
@@ -77,18 +104,24 @@ export class Stream {
 			throw new Error('Stream: seek past end');
 		}
 		this.pos = newPos;
-		this.bitPos = 0;
 	}
 
+	// Seek into already-reserved-but-unwritten space, extending `size` up to the
+	// seek target. libeot returns `EOT_SEEK_PAST_EOS` when the target exceeds the
+	// reserved capacity; we mirror that rather than growing the buffer, so an
+	// over-reach surfaces as a failure instead of a silent realloc.
 	seekAbsoluteThroughReserve(pos: number): void {
+		this.ensureByteAligned();
 		if (pos > this.reserved) {
-			this.reserve(pos);
+			throw new EotError(
+				EotErrorCode.SeekPastEos,
+				`Stream: seek to ${pos} past reserved end (${this.reserved})`,
+			);
 		}
 		if (pos > this.size) {
 			this.size = pos;
 		}
 		this.pos = pos;
-		this.bitPos = 0;
 	}
 
 	seekRelativeThroughReserve(offset: number): void {
@@ -216,15 +249,33 @@ export class Stream {
 	}
 
 	// --- Copy ---
-	/** Copy `length` bytes from this stream to `dest`. */
+	/**
+	 * Copy `length` bytes from this stream to `dest`.
+	 *
+	 * Both streams must be byte-aligned. The destination must already have the
+	 * capacity reserved: libeot returns `EOT_OUT_OF_RESERVED_SPACE` when a copy
+	 * would overrun the reserved buffer, so we throw rather than auto-growing —
+	 * an under-reservation is a bug we want surfaced, not silently patched.
+	 */
 	copyTo(dest: Stream, length: number): void {
+		this.ensureByteAligned();
+		dest.ensureByteAligned();
 		if (this.pos + length > this.size) {
 			throw new Error('Stream: not enough data for copy');
 		}
-		dest.ensureWrite(length);
+		const needed = dest.pos + length;
+		if (needed > dest.reserved) {
+			throw new EotError(
+				EotErrorCode.OutOfReservedSpace,
+				`Stream: copy of ${length} bytes exceeds reserved capacity (need ${needed}, reserved ${dest.reserved})`,
+			);
+		}
 		dest.buf.set(this.buf.subarray(this.pos, this.pos + length), dest.pos);
 		this.pos += length;
 		dest.pos += length;
+		if (dest.pos > dest.size) {
+			dest.size = dest.pos;
+		}
 	}
 
 	/** Read rest of data as 4-byte-aligned U32 values. Returns 0 on incomplete read. */

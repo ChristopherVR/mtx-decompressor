@@ -137,19 +137,34 @@ describe('parseCTF', () => {
 			{ tag: 'hdmx', data: new Uint8Array(50) },
 			{ tag: 'name', data: new Uint8Array([0xaa, 0xbb]) },
 		]);
-		const container = parseCTF([s0, new Stream(null, 0), new Stream(null, 0)]);
+		const warnings: string[] = [];
+		const container = parseCTF([s0, new Stream(null, 0), new Stream(null, 0)], {
+			onWarn: (m) => warnings.push(m),
+		});
 
 		// hdmx is dropped; name survives.
 		expect(container.tables.find((t) => t.tag === 'hdmx')).toBeUndefined();
 		const name = container.tables.find((t) => t.tag === 'name')!;
 		expect(name).toBeDefined();
 		expect(name.buf).toStrictEqual(new Uint8Array([0xaa, 0xbb]));
+
+		// The drop is surfaced structurally and via the onWarn hook.
+		expect(container.droppedTables).toEqual(['hdmx']);
+		expect(warnings).toHaveLength(1);
+		expect(warnings[0]).toContain('hdmx');
 	});
 
 	it('skips VDMX tables', () => {
 		const s0 = buildMinimalCTFStream0([{ tag: 'VDMX', data: new Uint8Array(50) }]);
 		const container = parseCTF([s0, new Stream(null, 0), new Stream(null, 0)]);
 		expect(container.tables.find((t) => t.tag === 'VDMX')).toBeUndefined();
+		expect(container.droppedTables).toEqual(['VDMX']);
+	});
+
+	it('omits droppedTables when nothing is dropped', () => {
+		const s0 = buildMinimalCTFStream0([{ tag: 'name', data: new Uint8Array([0xaa, 0xbb]) }]);
+		const container = parseCTF([s0, new Stream(null, 0), new Stream(null, 0)]);
+		expect(container.droppedTables).toBeUndefined();
 	});
 
 	// -----------------------------------------------------------------------

@@ -92,6 +92,7 @@ Decompress an MTX-compressed font into a TrueType binary.
 | `fontData`           | `Uint8Array`                 | Raw font bytes (MTX-compressed, optionally encrypted)                         |
 | `options.encrypted`  | `boolean` (default: `false`) | If `true`, XOR-decrypt with key `0x50` before decompression                   |
 | `options.compressed` | `boolean` (default: `true`)  | If `false`, skip decompression and return the (possibly decrypted) data as-is |
+| `options.onWarn`     | `(message: string) => void`  | Optional hook called for each non-fatal diagnostic (e.g. a dropped `hdmx`/`VDMX` table); the font is still produced |
 | **Returns**          | `Uint8Array`                 | A valid TrueType (.ttf) font binary                                           |
 
 ### `decompressEotFont(fontData, compressed, encrypted)`

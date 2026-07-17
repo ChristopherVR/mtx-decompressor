@@ -98,11 +98,14 @@ export function unpackMtx(
  * @param options.encrypted   If `true`, XOR-decrypt with {@link ENCRYPTION_KEY}.
  * @param options.compressed  If `false`, skip decompression and return the
  *                            (possibly decrypted) data as-is.
+ * @param options.onWarn      Optional hook invoked with a message for each
+ *                            non-fatal diagnostic (e.g. a dropped hdmx/VDMX
+ *                            table). The font is still produced.
  * @returns A `Uint8Array` containing a valid TrueType (.ttf) font.
  */
 export function decompressMtx(
 	fontData: Uint8Array,
-	options?: { encrypted?: boolean; compressed?: boolean },
+	options?: { encrypted?: boolean; compressed?: boolean; onWarn?: (message: string) => void },
 ): Uint8Array {
 	const encrypted = options?.encrypted ?? false;
 	const compressed = options?.compressed ?? true;
@@ -136,7 +139,7 @@ export function decompressMtx(
 	const streamObjects = streams.map((buf) => new Stream(buf, buf.length));
 
 	// --- Parse CTF structure -----------------------------------------------
-	const container = parseCTF(streamObjects);
+	const container = parseCTF(streamObjects, { onWarn: options?.onWarn });
 
 	// --- Assemble final TrueType font -------------------------------------
 	return dumpContainer(container);

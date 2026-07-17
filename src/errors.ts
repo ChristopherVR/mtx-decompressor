@@ -22,6 +22,12 @@ export enum EotErrorCode {
 	NoHmtxTable = 'NO_HMTX_TABLE',
 	CorruptHopcodeData = 'CORRUPT_HOPCODE_DATA',
 	MalformedHeadTable = 'MALFORMED_HEAD_TABLE',
+	/** A byte-level read/write/seek was attempted while mid-byte (`bitPos != 0`). */
+	OffByteBoundary = 'OFF_BYTE_BOUNDARY',
+	/** A write or copy would exceed the stream's reserved capacity. */
+	OutOfReservedSpace = 'OUT_OF_RESERVED_SPACE',
+	/** A seek would move past the stream's reserved end. */
+	SeekPastEos = 'SEEK_PAST_EOS',
 	MtxError = 'MTX_ERROR',
 	/** Recoverable: the coded version was wrong but a retry succeeded. */
 	WarnBadVersion = 'WARN_BAD_VERSION',

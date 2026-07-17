@@ -32,6 +32,21 @@ export interface SFNTTable {
 /** Collection of SFNT tables that constitute a font. */
 export interface SFNTContainer {
 	tables: SFNTTable[];
+	/**
+	 * Tags of tables the parser dropped rather than reconstructing (currently
+	 * `hdmx` / `VDMX`, which MTX does not round-trip). Present for diagnostics;
+	 * mirrors the warning libeot logs when it skips these tables.
+	 */
+	droppedTables?: string[];
+}
+
+/** Optional hooks for {@link parseCTF}. */
+export interface ParseCTFOptions {
+	/**
+	 * Invoked once per non-fatal diagnostic (e.g. a dropped hdmx/VDMX table).
+	 * Lets callers surface warnings without the library writing to `console`.
+	 */
+	onWarn?: (message: string) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -477,9 +492,15 @@ function decodeSimpleGlyph(
 		xDeltas[i] = dx;
 		yDeltas[i] = dy;
 
-		// Accumulate for bbox calculation
-		cumulativeX += dx;
-		cumulativeY += dy;
+		// Accumulate for bbox calculation using the int16-truncated deltas
+		// (`xDeltas`/`yDeltas` are Int16Array). This matches libeot, which
+		// narrows each delta to int16_t before folding it into the running
+		// bbox — and is the value the glyph actually renders with, since the
+		// written coordinates come from the same truncated deltas. Differs from
+		// the raw delta only for the 16-bit triplet encodings with a delta that
+		// overflows int16, which no valid encoder emits.
+		cumulativeX += xDeltas[i];
+		cumulativeY += yDeltas[i];
 
 		if (calcBBox) {
 			if (cumulativeX < minX) {
@@ -866,8 +887,9 @@ function parseMaxp(table: SFNTTable): MaxpData {
  *                   [2] = hinting code data
  * @returns An `SFNTContainer` holding all reconstructed SFNT tables.
  */
-export function parseCTF(streams: Stream[]): SFNTContainer {
+export function parseCTF(streams: Stream[], options?: ParseCTFOptions): SFNTContainer {
 	const s0 = streams[0];
+	const droppedTables: string[] = [];
 
 	// --- Read SFNT offset (header) table -----------------------------------
 	const _scalarType = s0.readU32();
@@ -891,9 +913,13 @@ export function parseCTF(streams: Stream[]): SFNTContainer {
 		// Read 4-byte ASCII tag
 		const tag = s0.readChar() + s0.readChar() + s0.readChar() + s0.readChar();
 
-		// Skip "hdmx" and "VDMX" tables entirely (12 bytes: checksum + offset + size)
+		// Skip "hdmx" and "VDMX" tables entirely (12 bytes: checksum + offset + size).
+		// MTX does not round-trip these; libeot logs a warning when it drops them,
+		// so we record the tag and notify any caller-supplied `onWarn` hook.
 		if (tag === 'hdmx' || tag === 'VDMX') {
 			s0.seekRelative(12);
+			droppedTables.push(tag);
+			options?.onWarn?.(`Ignoring ${tag} table — MTX does not preserve it`);
 			continue;
 		}
 
@@ -1007,5 +1033,5 @@ export function parseCTF(streams: Stream[]): SFNTContainer {
 		populateGlyfAndLoca(tables[glyfIdx], tables[locaIdx], headData, maxpData, streams);
 	}
 
-	return { tables };
+	return droppedTables.length > 0 ? { tables, droppedTables } : { tables };
 }

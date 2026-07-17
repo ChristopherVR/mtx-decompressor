@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 
+import { EotError, EotErrorCode } from './errors';
 import { Stream } from './stream';
 
 describe('stream', () => {
@@ -177,13 +178,23 @@ describe('stream', () => {
 	// Seek operations
 	// -----------------------------------------------------------------------
 	describe('seeking', () => {
-		it('seekAbsolute sets position and resets bitPos', () => {
+		it('seekAbsolute sets position when byte-aligned', () => {
 			const s = new Stream(new Uint8Array(10), 10);
 			s.pos = 5;
-			s.bitPos = 3;
 			s.seekAbsolute(2);
 			expect(s.pos).toBe(2);
 			expect(s.bitPos).toBe(0);
+		});
+
+		it('seekAbsolute throws OFF_BYTE_BOUNDARY when mid-byte', () => {
+			const s = new Stream(new Uint8Array(10), 10);
+			s.bitPos = 3;
+			expect(() => s.seekAbsolute(2)).toThrow(EotError);
+			try {
+				s.seekAbsolute(2);
+			} catch (e) {
+				expect((e as EotError).code).toBe(EotErrorCode.OffByteBoundary);
+			}
 		});
 
 		it('seekAbsolute throws when seeking past end', () => {
@@ -204,16 +215,29 @@ describe('stream', () => {
 			expect(() => s.seekRelative(-3)).toThrow('negative seek');
 		});
 
-		it('seekAbsoluteThroughReserve grows buffer when needed', () => {
+		it('seekAbsoluteThroughReserve extends size into reserved space', () => {
 			const s = new Stream(null, 0);
+			s.reserve(100);
 			s.seekAbsoluteThroughReserve(100);
 			expect(s.pos).toBe(100);
 			expect(s.size).toBe(100);
 			expect(s.reserved).toBeGreaterThanOrEqual(100);
 		});
 
-		it('seekRelativeThroughReserve grows from current position', () => {
+		it('seekAbsoluteThroughReserve throws SEEK_PAST_EOS past reserved end', () => {
 			const s = new Stream(null, 0);
+			s.reserve(50);
+			expect(() => s.seekAbsoluteThroughReserve(100)).toThrow(EotError);
+			try {
+				s.seekAbsoluteThroughReserve(100);
+			} catch (e) {
+				expect((e as EotError).code).toBe(EotErrorCode.SeekPastEos);
+			}
+		});
+
+		it('seekRelativeThroughReserve advances within reserved space', () => {
+			const s = new Stream(null, 0);
+			s.reserve(60);
 			s.seekAbsoluteThroughReserve(10);
 			s.seekRelativeThroughReserve(50);
 			expect(s.pos).toBe(60);
@@ -261,18 +285,58 @@ describe('stream', () => {
 			s.readNBits(8);
 			expect(() => s.readNBits(1)).toThrow('not enough data for bit read');
 		});
+
+		it('reading whole bytes worth of bits leaves the stream byte-aligned', () => {
+			// enc.xBits + enc.yBits is always a multiple of 8, so byte accessors
+			// remain usable after a pair of bit reads.
+			const s = new Stream(new Uint8Array([0xab, 0xcd, 0x12]), 3);
+			s.readNBits(4);
+			s.readNBits(12); // total 16 bits -> back on a byte boundary
+			expect(s.bitPos).toBe(0);
+			expect(s.readU8()).toBe(0x12);
+		});
+	});
+
+	// -----------------------------------------------------------------------
+	// Byte-boundary enforcement (item 1)
+	// -----------------------------------------------------------------------
+	describe('byte-boundary enforcement', () => {
+		it('throws OFF_BYTE_BOUNDARY on a byte read while mid-byte', () => {
+			const s = new Stream(new Uint8Array([0xff, 0x00]), 2);
+			s.readNBits(3); // now mid-byte (bitPos = 3)
+			expect(() => s.readU8()).toThrow(EotError);
+			try {
+				s.readU8();
+			} catch (e) {
+				expect((e as EotError).code).toBe(EotErrorCode.OffByteBoundary);
+			}
+		});
+
+		it('throws OFF_BYTE_BOUNDARY on a byte write while mid-byte', () => {
+			const s = new Stream(new Uint8Array([0xff, 0x00]), 2);
+			s.reserve(4);
+			s.readNBits(3);
+			expect(() => s.writeU8(0x42)).toThrow(EotError);
+			try {
+				s.writeU8(0x42);
+			} catch (e) {
+				expect((e as EotError).code).toBe(EotErrorCode.OffByteBoundary);
+			}
+		});
 	});
 
 	// -----------------------------------------------------------------------
 	// copyTo
 	// -----------------------------------------------------------------------
 	describe('copyTo', () => {
-		it('copies bytes from one stream to another', () => {
+		it('copies bytes into reserved destination space', () => {
 			const src = new Stream(new Uint8Array([10, 20, 30, 40]), 4);
 			const dest = new Stream(null, 0);
+			dest.reserve(3);
 			src.copyTo(dest, 3);
 			expect(src.pos).toBe(3);
 			expect(dest.pos).toBe(3);
+			expect(dest.size).toBe(3);
 			expect(dest.buf[0]).toBe(10);
 			expect(dest.buf[1]).toBe(20);
 			expect(dest.buf[2]).toBe(30);
@@ -281,7 +345,19 @@ describe('stream', () => {
 		it('throws when source does not have enough data', () => {
 			const src = new Stream(new Uint8Array([1, 2]), 2);
 			const dest = new Stream(null, 0);
+			dest.reserve(5);
 			expect(() => src.copyTo(dest, 5)).toThrow('not enough data for copy');
+		});
+
+		it('throws OUT_OF_RESERVED_SPACE when destination lacks capacity', () => {
+			const src = new Stream(new Uint8Array([1, 2, 3, 4]), 4);
+			const dest = new Stream(null, 0); // 0 reserved
+			expect(() => src.copyTo(dest, 3)).toThrow(EotError);
+			try {
+				src.copyTo(dest, 3);
+			} catch (e) {
+				expect((e as EotError).code).toBe(EotErrorCode.OutOfReservedSpace);
+			}
 		});
 	});
 

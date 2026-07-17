@@ -4,6 +4,7 @@
  */
 
 import type { SFNTContainer, SFNTTable } from './ctf-parser';
+import { EotError, EotErrorCode } from './errors';
 import { Stream } from './stream';
 
 // ---------------------------------------------------------------------------
@@ -199,15 +200,23 @@ export function dumpContainer(ctr: SFNTContainer): Uint8Array {
 	totalChecksum = (totalChecksum + beginningChecksum) >>> 0;
 
 	// --- 7. Patch head.checksumAdjustment (offset 8 within the head table) -
+	// A valid SFNT always carries a `head` table (parseCTF enforces this), and
+	// checksumAdjustment cannot be computed without it. Fail hard rather than
+	// emitting a font whose whole-file checksum is silently left unpatched.
+	if (!headTable) {
+		throw new EotError(
+			EotErrorCode.NoHeadTable,
+			'cannot assemble SFNT: container is missing a head table',
+		);
+	}
+
 	const finalChecksum = (0xb1b0afba - totalChecksum) >>> 0;
 
-	if (headTable) {
-		const adjOffset = headTable.offset + 8;
-		buf[adjOffset] = (finalChecksum >>> 24) & 0xff;
-		buf[adjOffset + 1] = (finalChecksum >>> 16) & 0xff;
-		buf[adjOffset + 2] = (finalChecksum >>> 8) & 0xff;
-		buf[adjOffset + 3] = finalChecksum & 0xff;
-	}
+	const adjOffset = headTable.offset + 8;
+	buf[adjOffset] = (finalChecksum >>> 24) & 0xff;
+	buf[adjOffset + 1] = (finalChecksum >>> 16) & 0xff;
+	buf[adjOffset + 2] = (finalChecksum >>> 8) & 0xff;
+	buf[adjOffset + 3] = finalChecksum & 0xff;
 
 	// Restore position to end
 	out.pos = afterTables;

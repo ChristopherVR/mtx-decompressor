@@ -1,6 +1,7 @@
 import { describe, it, expect, expectTypeOf } from 'vitest';
 
 import type { SFNTContainer, SFNTTable } from './ctf-parser';
+import { EotError, EotErrorCode } from './errors';
 import { dumpContainer } from './sfnt-builder';
 
 /**
@@ -14,6 +15,15 @@ function makeTable(tag: string, data: Uint8Array): SFNTTable {
 		buf: data,
 		checksum: 0,
 	};
+}
+
+/**
+ * A `head` table of `size` bytes (default 54). dumpContainer now requires a
+ * head table (it patches checksumAdjustment at offset 8), so structural tests
+ * include one. Keep `size` >= 12 so the 4-byte patch stays within the table.
+ */
+function makeHead(size = 54): SFNTTable {
+	return makeTable('head', new Uint8Array(size));
 }
 
 /**
@@ -36,7 +46,7 @@ describe('dumpContainer', () => {
 	// -----------------------------------------------------------------------
 	it('writes the TrueType scalar type (0x00010000)', () => {
 		const ctr: SFNTContainer = {
-			tables: [makeTable('name', new Uint8Array([0x01, 0x02, 0x03, 0x04]))],
+			tables: [makeHead()],
 		};
 		const result = dumpContainer(ctr);
 		expect(readU32(result, 0)).toBe(0x00010000);
@@ -44,7 +54,7 @@ describe('dumpContainer', () => {
 
 	it('writes correct numTables', () => {
 		const ctr: SFNTContainer = {
-			tables: [makeTable('name', new Uint8Array(4)), makeTable('cmap', new Uint8Array(8))],
+			tables: [makeHead(), makeTable('cmap', new Uint8Array(8))],
 		};
 		const result = dumpContainer(ctr);
 		expect(readU16(result, 4)).toBe(2);
@@ -52,7 +62,7 @@ describe('dumpContainer', () => {
 
 	it('computes correct searchRange, entrySelector, rangeShift for 1 table', () => {
 		const ctr: SFNTContainer = {
-			tables: [makeTable('name', new Uint8Array(4))],
+			tables: [makeHead()],
 		};
 		const result = dumpContainer(ctr);
 		// 1 table: maxPow2(1)=1, searchRange=1*16=16, entrySelector=0, rangeShift=1*16-16=0
@@ -64,7 +74,7 @@ describe('dumpContainer', () => {
 	it('computes correct searchRange for 3 tables', () => {
 		const ctr: SFNTContainer = {
 			tables: [
-				makeTable('name', new Uint8Array(4)),
+				makeHead(),
 				makeTable('cmap', new Uint8Array(4)),
 				makeTable('post', new Uint8Array(4)),
 			],
@@ -83,18 +93,17 @@ describe('dumpContainer', () => {
 	// -----------------------------------------------------------------------
 	it('writes table tags in the directory', () => {
 		const ctr: SFNTContainer = {
-			tables: [makeTable('name', new Uint8Array(4))],
+			tables: [makeHead()],
 		};
 		const result = dumpContainer(ctr);
 		// Table directory starts at offset 12
 		const tag = String.fromCharCode(result[12], result[13], result[14], result[15]);
-		expect(tag).toBe('name');
+		expect(tag).toBe('head');
 	});
 
 	it('writes correct table size in directory', () => {
-		const data = new Uint8Array(42);
 		const ctr: SFNTContainer = {
-			tables: [makeTable('test', data)],
+			tables: [makeHead(42)],
 		};
 		const result = dumpContainer(ctr);
 		// Directory entry: tag(4) + checksum(4) + offset(4) + size(4) starting at byte 12
@@ -108,18 +117,20 @@ describe('dumpContainer', () => {
 	it('embeds table data in the output', () => {
 		const data = new Uint8Array([0xde, 0xad, 0xbe, 0xef]);
 		const ctr: SFNTContainer = {
-			tables: [makeTable('test', data)],
+			// 'test' is first, so its directory entry / data stay at the front;
+			// head is required by dumpContainer and lives after it.
+			tables: [makeTable('test', data), makeHead()],
 		};
 		const result = dumpContainer(ctr);
-		// Table data starts after header (12) + directory (16)
-		const dataOffset = readU32(result, 12 + 8); // offset field in directory
+		// Table data starts after header (12) + directory (2*16)
+		const dataOffset = readU32(result, 12 + 8); // offset field of the first directory entry
 		expect(readU32(result, dataOffset)).toBe(0xdeadbeef);
 	});
 
 	it('computes correct checksum for a simple 4-byte table', () => {
 		const data = new Uint8Array([0x00, 0x00, 0x00, 0x01]);
 		const table = makeTable('test', data);
-		const ctr: SFNTContainer = { tables: [table] };
+		const ctr: SFNTContainer = { tables: [table, makeHead()] };
 		dumpContainer(ctr);
 		// After dump, table.checksum should be 0x00000001
 		expect(table.checksum).toBe(1);
@@ -131,7 +142,7 @@ describe('dumpContainer', () => {
 		// Checksum = 0x01000000 + 0x02000000 = 0x03000000
 		const data = new Uint8Array([0x01, 0x00, 0x00, 0x00, 0x02]);
 		const table = makeTable('test', data);
-		const ctr: SFNTContainer = { tables: [table] };
+		const ctr: SFNTContainer = { tables: [table, makeHead()] };
 		dumpContainer(ctr);
 		expect(table.checksum).toBe(0x03000000);
 	});
@@ -162,25 +173,22 @@ describe('dumpContainer', () => {
 	// Output size
 	// -----------------------------------------------------------------------
 	it('output size matches expected: header + directory + padded tables', () => {
-		const data1 = new Uint8Array(4);
-		const data2 = new Uint8Array(8);
 		const ctr: SFNTContainer = {
-			tables: [makeTable('tst1', data1), makeTable('tst2', data2)],
+			tables: [makeHead(12), makeTable('tst2', new Uint8Array(8))],
 		};
 		const result = dumpContainer(ctr);
-		// Expected: 12 (header) + 2*16 (directory) + 4 (table1 padded to 4) + 8 (table2 padded to 4)
-		expect(result).toHaveLength(12 + 32 + 4 + 8);
+		// Expected: 12 (header) + 2*16 (directory) + 12 (head padded to 12) + 8 (tst2 padded to 8)
+		expect(result).toHaveLength(12 + 32 + 12 + 8);
 	});
 
 	it('pads tables to 4-byte boundaries', () => {
 		// 5-byte table -> pads to 8 bytes in output
-		const data = new Uint8Array(5);
 		const ctr: SFNTContainer = {
-			tables: [makeTable('test', data)],
+			tables: [makeTable('test', new Uint8Array(5)), makeHead()],
 		};
 		const result = dumpContainer(ctr);
-		// 12 + 16 + 8 = 36
-		expect(result).toHaveLength(36);
+		// 12 (header) + 2*16 (directory) + 8 (test 5->8 padded) + 56 (head 54->56 padded) = 108
+		expect(result).toHaveLength(12 + 32 + 8 + 56);
 	});
 
 	// -----------------------------------------------------------------------
@@ -203,5 +211,20 @@ describe('dumpContainer', () => {
 		const tag2 = String.fromCharCode(result[28], result[29], result[30], result[31]);
 		expect(tag1).toBe('head');
 		expect(tag2).toBe('name');
+	});
+
+	// -----------------------------------------------------------------------
+	// Missing head table
+	// -----------------------------------------------------------------------
+	it('throws EotError NoHeadTable when the container has no head table', () => {
+		const ctr: SFNTContainer = {
+			tables: [makeTable('name', new Uint8Array(4)), makeTable('cmap', new Uint8Array(8))],
+		};
+		expect(() => dumpContainer(ctr)).toThrow(EotError);
+		try {
+			dumpContainer(ctr);
+		} catch (e) {
+			expect((e as EotError).code).toBe(EotErrorCode.NoHeadTable);
+		}
 	});
 });
