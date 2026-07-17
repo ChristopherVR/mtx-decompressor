@@ -69,6 +69,9 @@ export class BitIO {
 				value |= 1;
 			}
 		}
-		return value;
+		// Normalize to unsigned: a 32-bit-wide read whose top bit is set would
+		// otherwise surface as a negative number (JS `<<` is signed). libeot's
+		// MTX_BITIO_ReadValue returns an unsigned long.
+		return value >>> 0;
 	}
 }

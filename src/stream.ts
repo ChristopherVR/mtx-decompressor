@@ -159,6 +159,9 @@ export class Stream {
 	}
 
 	writeU24(v: number): void {
+		if (v < 0 || v > 0xffffff) {
+			throw new Error(`Stream: writeU24 value out of range: ${v}`);
+		}
 		this.ensureWrite(3);
 		this.buf[this.pos++] = (v >> 16) & 0xff;
 		this.buf[this.pos++] = (v >> 8) & 0xff;
@@ -186,6 +189,9 @@ export class Stream {
 		if (n === 0) {
 			return 0;
 		}
+		if (n > 32) {
+			throw new Error(`Stream: readNBits width out of range: ${n} (max 32)`);
+		}
 		let value = 0;
 		let bitsRemaining = n;
 		while (bitsRemaining > 0) {
@@ -204,7 +210,9 @@ export class Stream {
 			}
 			bitsRemaining -= bitsToRead;
 		}
-		return value;
+		// Normalize to unsigned: a 32-bit read whose top bit is set would
+		// otherwise surface as a negative number (JS `<<` is signed).
+		return value >>> 0;
 	}
 
 	// --- Copy ---
@@ -240,19 +248,27 @@ export class Stream {
 		return this.readU32();
 	}
 
-	/** Compute checksum of bytes from beginPos to endPos as 4-byte aligned U32 sum. */
+	/**
+	 * Compute the SFNT-style checksum of bytes in `[beginPos, endPos)` as a sum
+	 * of big-endian U32 words, zero-padding a final partial word. Bounds strictly
+	 * on `endPos` (not the stream's `size`), so an unaligned range never folds in
+	 * bytes past `endPos`. Leaves the stream position unchanged.
+	 */
 	checksumU32(beginPos: number, endPos: number): number {
-		let sum = 0;
-		const savedPos = this.pos;
-		this.pos = beginPos;
-		while (this.pos < endPos) {
-			const chunk = this.readRestAsU32();
-			if (chunk === null) {
-				break;
-			}
-			sum = (sum + chunk) >>> 0;
+		if (beginPos > endPos) {
+			throw new Error(`Stream: checksumU32 beginPos ${beginPos} > endPos ${endPos}`);
 		}
-		this.pos = savedPos;
+		if (endPos > this.size) {
+			throw new Error(`Stream: checksumU32 endPos ${endPos} exceeds size ${this.size}`);
+		}
+		let sum = 0;
+		for (let p = beginPos; p < endPos; p += 4) {
+			let word = 0;
+			for (let i = 0; i < 4; i++) {
+				word = (word << 8) | (p + i < endPos ? this.buf[p + i] : 0);
+			}
+			sum = (sum + (word >>> 0)) >>> 0;
+		}
 		return sum;
 	}
 

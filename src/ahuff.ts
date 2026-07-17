@@ -33,12 +33,16 @@ interface AHuffNode {
 }
 
 /**
- * Return the number of bits required to represent the positive integer `x`.
- * Equivalent to floor(log2(x)) + 1.
+ * Return the number of bits required to represent the non-negative integer `x`.
+ * Equivalent to floor(log2(x)) + 1 for x > 0.
+ *
+ * libeot's `BitsUsed(0)` returns 1 (its mask cascade falls through to the low
+ * bit); we match that so the function is a faithful port. In practice this
+ * module only ever calls it with x > 0, so the zero case is defensive.
  */
 function bitsUsed(x: number): number {
 	if (x <= 0) {
-		return 0;
+		return 1;
 	}
 	return 32 - Math.clz32(x);
 }
