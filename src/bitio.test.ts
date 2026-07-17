@@ -56,6 +56,27 @@ describe('bitIO', () => {
 			// 17th bit should throw
 			expect(() => bio.inputBit()).toThrow('end of data');
 		});
+
+		it('throws rather than yielding zero bits when size exceeds the buffer', () => {
+			// size claims 4 bytes but only 1 is present. The extra length must be
+			// clamped so reads past the real end throw instead of silently
+			// returning 0 bits (which would corrupt a decode).
+			const bio = new BitIO(new Uint8Array([0xff]), 0, 4);
+			for (let i = 0; i < 8; i++) {
+				expect(bio.inputBit()).toBeTruthy();
+			}
+			expect(() => bio.inputBit()).toThrow('end of data');
+		});
+
+		it('stays consistent after a caught end-of-data error', () => {
+			const bio = new BitIO(new Uint8Array([0xff]));
+			for (let i = 0; i < 8; i++) {
+				bio.inputBit();
+			}
+			expect(() => bio.inputBit()).toThrow('end of data');
+			// A retry must throw again, not return a stale/garbage bit.
+			expect(() => bio.inputBit()).toThrow('end of data');
+		});
 	});
 
 	// -----------------------------------------------------------------------

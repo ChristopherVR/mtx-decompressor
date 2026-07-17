@@ -203,8 +203,15 @@ interface CTFStreamOptions {
  * table data + glyph data at the glyf offset).
  */
 function buildCTFStream0(opts: CTFStreamOptions): Uint8Array {
+	// parseCTF requires head, maxp, and hmtx to be present (it errors otherwise).
+	// hmtx is loaded raw and only presence-checked, so a minimal record suffices;
+	// inject one when a caller didn't supply it so fixtures stay concise.
+	const inputTables = opts.tables.some((t) => t.tag === 'hmtx')
+		? opts.tables
+		: [...opts.tables, { tag: 'hmtx', data: new Uint8Array([0, 0, 0, 0]) }];
+
 	// We need head, maxp, glyf + any extra tables
-	const allTags = opts.tables.map((t) => t.tag).concat(['glyf']);
+	const allTags = inputTables.map((t) => t.tag).concat(['glyf']);
 	const numTables = allTags.length;
 
 	const headerSize = 12;
@@ -220,7 +227,7 @@ function buildCTFStream0(opts: CTFStreamOptions): Uint8Array {
 		data: Uint8Array | null;
 	}> = [];
 
-	for (const t of opts.tables) {
+	for (const t of inputTables) {
 		tableLayouts.push({ tag: t.tag, offset, size: t.data.length, data: t.data });
 		offset += t.data.length;
 	}
@@ -524,8 +531,8 @@ describe('cTF integration — simple glyph (triangle)', () => {
 	it('output font has correct number of tables', () => {
 		const { ttfOutput } = runCTFPipeline(stream0);
 		const numTables = (ttfOutput[4] << 8) | ttfOutput[5];
-		// head, maxp, glyf, loca = 4 tables
-		expect(numTables).toBe(4);
+		// head, maxp, hmtx (injected by the fixture builder), glyf, loca = 5
+		expect(numTables).toBe(5);
 	});
 
 	it('head.checksumAdjustment is patched in the output', () => {
@@ -675,7 +682,7 @@ describe('cTF integration — multiple glyphs', () => {
 	it('produces valid TrueType with correct table count', () => {
 		const { ttfOutput } = runCTFPipeline(stream0);
 		const numTables = (ttfOutput[4] << 8) | ttfOutput[5];
-		expect(numTables).toBe(4); // head, maxp, glyf, loca
+		expect(numTables).toBe(5); // head, maxp, hmtx, glyf, loca
 	});
 });
 
@@ -871,9 +878,9 @@ describe('cTF integration — CVT table delta decoding', () => {
 		const cvtEncoded = new Stream(null, 0);
 		cvtEncoded.reserve(64);
 
-		// CVT format: U16 table length (in bytes), then delta-encoded entries
-		// 3 entries × 2 bytes = 6 bytes
-		cvtEncoded.writeU16(6);
+		// CVT format: U16 numEntries (count, not bytes), then delta-encoded
+		// entries. Each entry decodes to one big-endian S16.
+		cvtEncoded.writeU16(3);
 
 		// Entry 0: literal 100 → lastValue = 100
 		cvtEncoded.writeU8(100);
@@ -904,6 +911,8 @@ describe('cTF integration — CVT table delta decoding', () => {
 		const { container } = runCTFPipeline(stream0);
 		const cvt = container.tables.find((t) => t.tag === 'cvt ')!;
 		expect(cvt).toBeDefined();
+		// 3 entries × 2 bytes each — a regression guard against the historical
+		// bug where numEntries was misread as a byte count, halving the table.
 		expect(cvt.bufSize).toBe(6);
 
 		// Read the decoded CVT values (big-endian S16)

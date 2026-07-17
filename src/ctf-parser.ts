@@ -7,6 +7,7 @@
  * @see http://www.w3.org/Submission/MTX/
  */
 
+import { EotError, EotErrorCode } from './errors';
 import { Stream } from './stream';
 import { TRIPLET_ENCODINGS } from './triplet-encodings';
 
@@ -157,12 +158,13 @@ function read255Short(s: Stream): number {
 function unpackCVT(table: SFNTTable, sIn: Stream): void {
 	sIn.seekAbsolute(table.offset);
 
-	// First U16 is the table length in bytes (each entry = 2 bytes)
-	const tableLength = sIn.readU16();
-	const numEntries = tableLength >>> 1; // each entry is 2 bytes
+	// First U16 is the number of CVT entries (each decodes to one 2-byte S16),
+	// per the MTX spec §5.2 ("USHORT numEntries — Number of cvt entries") and
+	// libeot's unpackCVT, which reserves numEntries * sizeof(int16_t) bytes.
+	const numEntries = sIn.readU16();
 
 	const out = new Stream(null, 0);
-	out.reserve(tableLength);
+	out.reserve(numEntries * 2);
 
 	let lastValue = 0;
 
@@ -271,9 +273,18 @@ function decodePushInstructions(sIn: Stream, sOut: Stream, pushCount: number): v
 		// Peek at next byte to check for hop codes
 		const code = sIn.peekU8();
 
-		if (code === 0xfb && remaining >= 3 && data.length >= 2) {
+		if (code === 0xfb) {
 			// hop3: A B 0xFB C → A B A C A
-			// A is data[dataIndex - 2] (the value 2 back in decoded output)
+			// A is data[dataIndex - 2] (the value 2 back in decoded output).
+			// 0xFB is unambiguously a hop marker here; if the surrounding data
+			// can't satisfy the expansion the stream is corrupt (libeot returns
+			// EOT_CORRUPT_HOPCODE_DATA rather than treating 0xFB as a literal).
+			if (remaining < 3 || data.length < 2) {
+				throw new EotError(
+					EotErrorCode.CorruptHopcodeData,
+					`corrupt hop3 (0xFB) push data: remaining=${remaining}, decoded=${data.length}`,
+				);
+			}
 			sIn.readU8(); // consume the 0xFB
 			const prev = data[data.length - 2];
 			put(prev);
@@ -281,8 +292,14 @@ function decodePushInstructions(sIn: Stream, sOut: Stream, pushCount: number): v
 			put(val);
 			put(prev);
 			remaining -= 3;
-		} else if (code === 0xfc && remaining >= 5 && data.length >= 2) {
+		} else if (code === 0xfc) {
 			// hop4: A B 0xFC C D → A B A C A D A
+			if (remaining < 5 || data.length < 2) {
+				throw new EotError(
+					EotErrorCode.CorruptHopcodeData,
+					`corrupt hop4 (0xFC) push data: remaining=${remaining}, decoded=${data.length}`,
+				);
+			}
 			sIn.readU8(); // consume the 0xFC
 			const prev = data[data.length - 2];
 			put(prev);
@@ -867,7 +884,7 @@ export function parseCTF(streams: Stream[]): SFNTContainer {
 	let locaIdx = -1;
 	let maxpIdx = -1;
 	let headIdx = -1;
-	let _hmtxIdx = -1;
+	let hmtxIdx = -1;
 	let _cvtIdx = -1;
 
 	for (let i = 0; i < numTables; i++) {
@@ -906,7 +923,7 @@ export function parseCTF(streams: Stream[]): SFNTContainer {
 		} else if (tag === 'head') {
 			headIdx = idx;
 		} else if (tag === 'hmtx') {
-			_hmtxIdx = idx;
+			hmtxIdx = idx;
 		} else if (tag === 'cvt ') {
 			_cvtIdx = idx;
 		}
@@ -935,8 +952,17 @@ export function parseCTF(streams: Stream[]): SFNTContainer {
 		}
 		table.buf = buf;
 
-		// For the `head` table, zero out bytes 8–11 (checksumAdjustment)
+		// For the `head` table, zero out bytes 8–11 (checksumAdjustment).
+		// Guard the length first: JS silently ignores out-of-range typed-array
+		// writes, so without this a truncated head would be accepted silently
+		// (libeot returns EOT_MALFORMED_HEAD_TABLE for bufSize < 12).
 		if (table.tag === 'head') {
+			if (table.bufSize < 12) {
+				throw new EotError(
+					EotErrorCode.MalformedHeadTable,
+					`head table too small: ${table.bufSize} bytes (need at least 12)`,
+				);
+			}
 			table.buf[8] = 0;
 			table.buf[9] = 0;
 			table.buf[10] = 0;
@@ -944,22 +970,24 @@ export function parseCTF(streams: Stream[]): SFNTContainer {
 		}
 	}
 
-	// --- Parse head and maxp for glyph decoding parameters -----------------
-	let headData: HeadData = { indexToLocFormat: 0 };
-	if (headIdx >= 0) {
-		headData = parseHead(tables[headIdx]);
+	// --- Require the structural tables -------------------------------------
+	// libeot (parseCTF.c:782-790) rejects a font missing maxp/head/hmtx rather
+	// than proceeding with fabricated defaults. Substituting zero-defaults here
+	// would decode a structurally valid but empty/garbage font instead of
+	// surfacing the corruption.
+	if (maxpIdx < 0) {
+		throw new EotError(EotErrorCode.NoMaxpTable, 'CTF font is missing a maxp table');
+	}
+	if (headIdx < 0) {
+		throw new EotError(EotErrorCode.NoHeadTable, 'CTF font is missing a head table');
+	}
+	if (hmtxIdx < 0) {
+		throw new EotError(EotErrorCode.NoHmtxTable, 'CTF font is missing an hmtx table');
 	}
 
-	let maxpData: MaxpData = {
-		numGlyphs: 0,
-		maxPoints: 0,
-		maxContours: 0,
-		maxSizeOfInstructions: 0,
-		maxComponentElements: 0,
-	};
-	if (maxpIdx >= 0) {
-		maxpData = parseMaxp(tables[maxpIdx]);
-	}
+	// --- Parse head and maxp for glyph decoding parameters -----------------
+	const headData: HeadData = parseHead(tables[headIdx]);
+	const maxpData: MaxpData = parseMaxp(tables[maxpIdx]);
 
 	// --- Decode glyf and build loca ----------------------------------------
 	if (glyfIdx >= 0) {

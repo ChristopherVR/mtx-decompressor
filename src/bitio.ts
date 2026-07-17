@@ -18,12 +18,15 @@ export class BitIO {
 	/**
 	 * @param data   Source byte buffer.
 	 * @param offset Starting byte offset into `data`.
-	 * @param size   Number of bytes available from `offset`.
+	 * @param size   Absolute end index into `data` (exclusive) — reading stops
+	 *               once `index` reaches it. Defaults to `data.length`. Clamped
+	 *               to `data.length` so an over-large value cannot read past the
+	 *               end of the buffer and silently yield zero bits.
 	 */
 	constructor(data: Uint8Array, offset: number = 0, size?: number) {
 		this.data = data;
 		this.index = offset;
-		this.size = size ?? data.length;
+		this.size = Math.min(size ?? data.length, data.length);
 	}
 
 	/**
@@ -37,13 +40,17 @@ export class BitIO {
 	 *     shifted out of the original byte value).
 	 */
 	inputBit(): boolean {
-		if (this.bitCount-- === 0) {
+		if (this.bitCount === 0) {
+			// Reload before consuming any bit, and throw *before* mutating any
+			// state so a caught end-of-data error leaves the reader consistent
+			// (a retry throws again rather than returning a stale bit).
 			if (this.index >= this.size) {
 				throw new Error('BitIO: end of data');
 			}
 			this.bitBuffer = this.data[this.index++];
-			this.bitCount = 7;
+			this.bitCount = 8;
 		}
+		this.bitCount--;
 		this.bitBuffer <<= 1;
 		return (this.bitBuffer & 0x100) !== 0;
 	}

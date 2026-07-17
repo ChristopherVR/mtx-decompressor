@@ -37,11 +37,22 @@ const LEN_MIN = 2;
 /** Minimum match distance returned by decodeDistance. */
 const DIST_MIN = 1;
 
-/** Hard cap on the declared LZCOMP output length to bound allocations. */
-const MAX_OUT_LEN = 4 * 1024 * 1024; // 4 MiB
+/**
+ * Hard cap on the declared LZCOMP output length. The `out_len` header field is
+ * 24 bits wide (see `readValue(24)` below), so 2^24 - 1 is the largest value an
+ * encoder can legally emit; anything above that is corrupt input, not a large
+ * font. Capping lower would reject legitimate fonts (e.g. large CJK glyph
+ * streams that exceed a few MiB uncompressed).
+ */
+const MAX_OUT_LEN = (1 << 24) - 1; // 16 MiB - 1 (24-bit field maximum)
 
-/** Hard cap on RLE-expanded output buffer growth. */
-const MAX_OUT = 16 * 1024 * 1024; // 16 MiB
+/**
+ * Hard cap on RLE-expanded output growth. RLE can legally expand up to 255:1
+ * per escape triple, so the expanded stream can exceed the declared `out_len`.
+ * Bound it a small multiple above the 24-bit maximum to stop a hostile stream
+ * from growing the buffer without limit while still admitting real fonts.
+ */
+const MAX_OUT = 64 * 1024 * 1024; // 64 MiB
 
 // ---------------------------------------------------------------------------
 // RLE state constants

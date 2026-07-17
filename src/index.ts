@@ -12,3 +12,4 @@
 
 export { decompressMtx, decompressEotFont, unpackMtx } from './mtx-decompress';
 export type { SFNTContainer, SFNTTable } from './ctf-parser';
+export { EotError, EotErrorCode, EOT_WARN } from './errors';
