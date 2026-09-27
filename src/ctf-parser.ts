@@ -10,6 +10,8 @@
 import { EotError, EotErrorCode } from './errors';
 import { Stream } from './stream';
 import { TRIPLET_ENCODINGS } from './triplet-encodings';
+import { decodeHdmx } from './hdmx';
+import { decodeVdmx } from './vdmx';
 
 // ---------------------------------------------------------------------------
 // Public interfaces
@@ -33,9 +35,8 @@ export interface SFNTTable {
 export interface SFNTContainer {
 	tables: SFNTTable[];
 	/**
-	 * Tags of tables the parser dropped rather than reconstructing (currently
-	 * `hdmx` / `VDMX`, which MTX does not round-trip). Present for diagnostics;
-	 * mirrors the warning libeot logs when it skips these tables.
+	 * Legacy diagnostic field. Supported metric tables are now reconstructed
+	 * rather than dropped, so this field is no longer populated.
 	 */
 	droppedTables?: string[];
 }
@@ -43,7 +44,7 @@ export interface SFNTContainer {
 /** Optional hooks for {@link parseCTF}. */
 export interface ParseCTFOptions {
 	/**
-	 * Invoked once per non-fatal diagnostic (e.g. a dropped hdmx/VDMX table).
+	 * Invoked once per non-fatal diagnostic.
 	 * Lets callers surface warnings without the library writing to `console`.
 	 */
 	onWarn?: (message: string) => void;
@@ -900,7 +901,6 @@ function parseMaxp(table: SFNTTable): MaxpData {
  */
 export function parseCTF(streams: Stream[], options?: ParseCTFOptions): SFNTContainer {
 	const s0 = streams[0];
-	const droppedTables: string[] = [];
 
 	// --- Read SFNT offset (header) table -----------------------------------
 	const _scalarType = s0.readU32();
@@ -923,16 +923,6 @@ export function parseCTF(streams: Stream[], options?: ParseCTFOptions): SFNTCont
 	for (let i = 0; i < numTables; i++) {
 		// Read 4-byte ASCII tag
 		const tag = s0.readChar() + s0.readChar() + s0.readChar() + s0.readChar();
-
-		// Skip "hdmx" and "VDMX" tables entirely (12 bytes: checksum + offset + size).
-		// MTX does not round-trip these; libeot logs a warning when it drops them,
-		// so we record the tag and notify any caller-supplied `onWarn` hook.
-		if (tag === 'hdmx' || tag === 'VDMX') {
-			s0.seekRelative(12);
-			droppedTables.push(tag);
-			options?.onWarn?.(`Ignoring ${tag} table — MTX does not preserve it`);
-			continue;
-		}
 
 		// Read checksum (4 bytes — skipped but consumed), offset, and size
 		s0.seekRelative(4); // skip checksum
@@ -983,6 +973,9 @@ export function parseCTF(streams: Stream[], options?: ParseCTFOptions): SFNTCont
 
 		// Normal table: copy raw bytes from stream 0
 		s0.seekAbsolute(table.offset);
+		if (table.bufSize > s0.size - table.offset) {
+			throw new EotError(EotErrorCode.InsufficientBytes, `truncated ${table.tag} table`);
+		}
 		const buf = new Uint8Array(table.bufSize);
 		for (let b = 0; b < table.bufSize; b++) {
 			buf[b] = s0.readU8();
@@ -1026,6 +1019,34 @@ export function parseCTF(streams: Stream[], options?: ParseCTFOptions): SFNTCont
 	const headData: HeadData = parseHead(tables[headIdx]);
 	const maxpData: MaxpData = parseMaxp(tables[maxpIdx]);
 
+	// Metric tables use their own LSB-first prediction-error encoding. Decode
+	// after loading all dependencies, regardless of table-directory order.
+	for (const table of tables) {
+		if (table.tag === 'VDMX') {
+			table.buf = decodeVdmx(table.buf);
+			table.bufSize = table.buf.length;
+		} else if (table.tag === 'hdmx') {
+			const version = table.buf.length >= 2 ? (table.buf[0] << 8) | table.buf[1] : -1;
+			if (version === 0) {
+				const hhea = tables.find((candidate) => candidate.tag === 'hhea');
+				if (!hhea || hhea.buf.length < 36) {
+					throw new EotError(EotErrorCode.CorruptFile, 'compressed hdmx requires a complete hhea table');
+				}
+				const head = tables[headIdx].buf;
+				table.buf = decodeHdmx(table.buf, {
+					numGlyphs: maxpData.numGlyphs,
+					unitsPerEm: (head[18] << 8) | head[19],
+					numberOfHMetrics: (hhea.buf[34] << 8) | hhea.buf[35],
+					hmtx: tables[hmtxIdx].buf,
+				});
+			} else {
+				// Complemented versions mark raw tables; they need no predictor.
+				table.buf = decodeHdmx(table.buf);
+			}
+			table.bufSize = table.buf.length;
+		}
+	}
+
 	// --- Decode glyf and build loca ----------------------------------------
 	if (glyfIdx >= 0) {
 		// Add a loca table if one was not present in the directory
@@ -1044,5 +1065,5 @@ export function parseCTF(streams: Stream[], options?: ParseCTFOptions): SFNTCont
 		populateGlyfAndLoca(tables[glyfIdx], tables[locaIdx], headData, maxpData, streams);
 	}
 
-	return droppedTables.length > 0 ? { tables, droppedTables } : { tables };
+	return { tables };
 }

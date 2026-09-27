@@ -3,6 +3,7 @@ import * as mtx from './mtx-decompress';
 
 import {
 	parseEotMetadata,
+	inspectEotProtection,
 	eotToTtf,
 	canLegallyEdit,
 	TTEMBED_TTCOMPRESSED,
@@ -224,14 +225,14 @@ describe('eotToTtf', () => {
 		const onWarn = vi.fn();
 		const fontData = new Uint8Array([1, 2, 3]);
 		const decode = vi.spyOn(mtx, 'decompressMtx').mockImplementation((data, options) => {
-			options?.onWarn?.('Ignoring hdmx table');
+			options?.onWarn?.('Decoder diagnostic');
 			return data;
 		});
 		try {
 			const eot = buildEot({ flags: TTEMBED_TTCOMPRESSED | TTEMBED_XORENCRYPTDATA, fontData });
 			expect(eotToTtf(eot, { onWarn })).toEqual(fontData);
 			expect(decode).toHaveBeenCalledWith(fontData, { compressed: true, encrypted: true, onWarn });
-			expect(onWarn).toHaveBeenCalledExactlyOnceWith('Ignoring hdmx table');
+			expect(onWarn).toHaveBeenCalledExactlyOnceWith('Decoder diagnostic');
 		} finally {
 			decode.mockRestore();
 		}
@@ -248,6 +249,26 @@ describe('eotToTtf', () => {
 		const encrypted = plain.map((b) => b ^ 0x50);
 		const eot = buildEot({ flags: TTEMBED_XORENCRYPTDATA, fontData: encrypted });
 		expect(eotToTtf(eot)).toStrictEqual(plain);
+	});
+});
+
+describe('inspectEotProtection', () => {
+	it('reports EOT XOR separately from password protection and permission metadata', () => {
+		const result = inspectEotProtection(
+			buildEot({ flags: TTEMBED_XORENCRYPTDATA, permissions: 0x0004, version: 2, rootString: 'https://fonts.example/' }),
+		);
+		expect(result).toEqual({
+			encryption: 'xor-0x50',
+			passwordProtection: 'not_supported_by_eot',
+			embeddingPermissions: 0x0004,
+			rootString: 'https://fonts.example/',
+		});
+	});
+
+	it('reports no declared EOT XOR when its flag is absent', () => {
+		const result = inspectEotProtection(buildEot({ flags: TTEMBED_TTCOMPRESSED }));
+		expect(result.encryption).toBe('none');
+		expect(result.passwordProtection).toBe('not_supported_by_eot');
 	});
 });
 

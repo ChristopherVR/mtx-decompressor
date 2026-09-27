@@ -90,6 +90,24 @@ export interface EotMetadata {
 	badVersion: boolean;
 }
 
+/**
+ * Protection-related information declared by an EOT container.
+ *
+ * EOT defines XOR obfuscation for FontData, plus separate embedding and
+ * RootString restrictions. It defines no password-protection mechanism;
+ * this result says nothing about an outer document or archive containing EOT.
+ */
+export interface EotProtection {
+	/** EOT FontData transform declared by TTEMBED_XORENCRYPTDATA. */
+	encryption: 'none' | 'xor-0x50';
+	/** EOT has no password-protection field or password-based encryption. */
+	passwordProtection: 'not_supported_by_eot';
+	/** fsType embedding permission bits copied into the EOT header. */
+	embeddingPermissions: number;
+	/** RootString URL restrictions; an empty string means none are declared. */
+	rootString: string;
+}
+
 // ---------------------------------------------------------------------------
 // Little-endian primitive reads (bounds-checked)
 // ---------------------------------------------------------------------------
@@ -406,6 +424,27 @@ export function parseEotMetadata(bytes: Uint8Array): EotMetadata {
 }
 
 /**
+ * Inspect the protection indicators declared by an EOT container.
+ *
+ * This reports EOT's XOR transform independently from `fsType` embedding
+ * permissions and RootString URL restrictions. EOT has no password-based
+ * protection mechanism; this cannot determine whether an outer file or
+ * document containing the EOT is password-protected.
+ *
+ * @param bytes Raw `.eot` file bytes.
+ * @throws {EotError} on a corrupt or truncated container.
+ */
+export function inspectEotProtection(bytes: Uint8Array): EotProtection {
+	const metadata = parseEotMetadata(bytes);
+	return {
+		encryption: metadata.encrypted ? 'xor-0x50' : 'none',
+		passwordProtection: 'not_supported_by_eot',
+		embeddingPermissions: metadata.permissions,
+		rootString: metadata.rootString,
+	};
+}
+
+/**
  * Decode a raw EOT container straight into a TrueType (.ttf) font binary.
  *
  * Parses the header, locates and slices the embedded font data, and runs it
@@ -416,7 +455,7 @@ export function parseEotMetadata(bytes: Uint8Array): EotMetadata {
  * @param bytes Raw `.eot` file bytes.
  * @returns The reconstructed TrueType font.
  * @param options.onWarn Called for recovered header-version mismatches and
- * non-fatal decompression diagnostics, including dropped tables.
+ * non-fatal decompression diagnostics.
  * @throws {EotError} on a corrupt container or during decompression.
  */
 export function eotToTtf(

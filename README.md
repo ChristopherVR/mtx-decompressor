@@ -70,7 +70,20 @@ header parsing, font-data extraction, and the container's compression/encryption
 flags. Throws `EotError` on a corrupt or truncated container.
 
 Pass `{ onWarn: (message) => console.warn(message) }` to receive diagnostics
-for recovered header-version mismatches and dropped tables during decompression.
+for recovered header-version mismatches and other non-fatal diagnostics.
+
+### `inspectEotProtection(eotBytes)`
+
+Inspect protection metadata without decompressing the font. Returns
+`encryption` (`'none'` or `'xor-0x50'`), `passwordProtection`
+(`'not_supported_by_eot'`), `embeddingPermissions` (the raw `fsType` bits),
+and `rootString` (URL restrictions).
+
+EOT specifies fixed-key XOR obfuscation, which `eotToTtf` detects and removes
+automatically. It has no password-based encryption mechanism. A password on an
+enclosing Office document or archive must be handled before extracting the EOT;
+this API cannot detect that password from the extracted font. Embedding permission
+bits and URL restrictions are separate from encryption.
 
 ### `parseEotMetadata(eotBytes)`
 
@@ -95,7 +108,7 @@ Decompress an MTX-compressed font into a TrueType binary.
 | `fontData`           | `Uint8Array`                 | Raw font bytes (MTX-compressed, optionally encrypted)                         |
 | `options.encrypted`  | `boolean` (default: `false`) | If `true`, XOR-decrypt with key `0x50` before decompression                   |
 | `options.compressed` | `boolean` (default: `true`)  | If `false`, skip decompression and return the (possibly decrypted) data as-is |
-| `options.onWarn`     | `(message: string) => void`  | Optional hook called for each non-fatal diagnostic (e.g. a dropped `hdmx`/`VDMX` table); the font is still produced |
+| `options.onWarn`     | `(message: string) => void`  | Optional hook called for each non-fatal diagnostic; the font is still produced |
 | **Returns**          | `Uint8Array`                 | A valid TrueType (.ttf) font binary                                           |
 
 ### `decompressEotFont(fontData, compressed, encrypted)`
@@ -116,8 +129,14 @@ Reconstruction automatically promotes short `loca` offsets to the long format
 when the expanded glyph data exceeds 131,070 bytes, updating `head` accordingly.
 The assembled font has a sorted table directory and recalculated checksums.
 
-The decoder still omits `hdmx` and `VDMX` tables. Use `onWarn` to surface these
-omissions; `parseCTF` also lists their tags in `droppedTables`.
+The decoder reconstructs `hdmx` and `VDMX` metric tables, including their
+prediction-error encoding and raw fallback form. Malformed metric data throws
+`EotError` instead of silently omitting a table. The legacy `droppedTables` field
+is retained in the type for compatibility but is no longer populated.
+
+The metric encodings and XOR behavior are documented in the
+[MTX](https://www.w3.org/submissions/MTX/) and
+[EOT](https://www.w3.org/submissions/EOT/) specifications.
 
 ## Provenance
 

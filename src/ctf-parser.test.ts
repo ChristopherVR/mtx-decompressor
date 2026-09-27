@@ -3,6 +3,7 @@ import { describe, it, expect } from 'vitest';
 import { parseCTF } from './ctf-parser';
 import { EotError, EotErrorCode } from './errors';
 import { Stream } from './stream';
+import { dumpContainer } from './sfnt-builder';
 
 /** Minimal 54-byte `head` table (indexToLocFormat lives at offset 50). */
 function minimalHead(): Uint8Array {
@@ -169,11 +170,12 @@ describe('parseCTF', () => {
 	});
 
 	// -----------------------------------------------------------------------
-	// hdmx and VDMX table skipping
+	// Metric table reconstruction
 	// -----------------------------------------------------------------------
-	it('skips hdmx tables', () => {
+	it('preserves raw hdmx tables and restores their complemented version', () => {
+		const raw = new Uint8Array([0xff, 0xff, 0, 1, 0, 0, 0, 4, 10, 6, 6, 5]);
 		const s0 = buildMinimalCTFStream0([
-			{ tag: 'hdmx', data: new Uint8Array(50) },
+			{ tag: 'hdmx', data: raw },
 			{ tag: 'name', data: new Uint8Array([0xaa, 0xbb]) },
 		]);
 		const warnings: string[] = [];
@@ -181,23 +183,63 @@ describe('parseCTF', () => {
 			onWarn: (m) => warnings.push(m),
 		});
 
-		// hdmx is dropped; name survives.
-		expect(container.tables.find((t) => t.tag === 'hdmx')).toBeUndefined();
+		const expected = raw.slice();
+		expected[0] = expected[1] = 0;
+		expect(container.tables.find((t) => t.tag === 'hdmx')?.buf).toEqual(expected);
 		const name = container.tables.find((t) => t.tag === 'name')!;
 		expect(name).toBeDefined();
 		expect(name.buf).toStrictEqual(new Uint8Array([0xaa, 0xbb]));
 
-		// The drop is surfaced structurally and via the onWarn hook.
-		expect(container.droppedTables).toEqual(['hdmx']);
-		expect(warnings).toHaveLength(1);
-		expect(warnings[0]).toContain('hdmx');
+		expect(container.droppedTables).toBeUndefined();
+		expect(warnings).toHaveLength(0);
 	});
 
-	it('skips VDMX tables', () => {
-		const s0 = buildMinimalCTFStream0([{ tag: 'VDMX', data: new Uint8Array(50) }]);
+	it('reconstructs compressed VDMX records', () => {
+		const data = new Uint8Array([
+			0, 1, 0, 1, 0, 1, 1, 1, 1, 1, 0, 12,
+			0, 2, 8, 0, 4, 0, 0,
+		]);
+		const s0 = buildMinimalCTFStream0([{ tag: 'VDMX', data }]);
 		const container = parseCTF([s0, new Stream(null, 0), new Stream(null, 0)]);
-		expect(container.tables.find((t) => t.tag === 'VDMX')).toBeUndefined();
-		expect(container.droppedTables).toEqual(['VDMX']);
+		expect(container.tables.find((t) => t.tag === 'VDMX')?.buf).toEqual(new Uint8Array([
+			0, 1, 0, 1, 0, 1, 1, 1, 1, 1, 0, 12,
+			0, 2, 8, 9, 0, 8, 0, 8, 255, 252, 0, 9, 0, 9, 255, 251,
+		]));
+		expect(container.droppedTables).toBeUndefined();
+	});
+
+	it('reconstructs hdmx using dependencies appearing later in the directory', () => {
+		const head = minimalHead();
+		head[18] = 3;
+		head[19] = 232; // unitsPerEm = 1000
+		const maxp = minimalMaxp();
+		maxp[5] = 2;
+		const hhea = new Uint8Array(36);
+		hhea[35] = 1; // last advance width is reused for glyph 1
+		const s0 = buildMinimalCTFStream0([
+			{ tag: 'hdmx', data: new Uint8Array([0, 0, 0, 1, 0, 0, 0, 4, 10, 6, 1]) },
+			{ tag: 'head', data: head }, { tag: 'maxp', data: maxp },
+			{ tag: 'hhea', data: hhea },
+			{ tag: 'hmtx', data: new Uint8Array([1, 244, 0, 0, 0, 0]) },
+		]);
+		const container = parseCTF([s0, new Stream(null, 0), new Stream(null, 0)]);
+		const expected = new Uint8Array([0, 0, 0, 1, 0, 0, 0, 4, 10, 6, 6, 5]);
+		const hdmx = container.tables.find((t) => t.tag === 'hdmx')!;
+		expect(hdmx.buf).toEqual(expected);
+		expect(hdmx.bufSize).toBe(expected.length);
+		const font = dumpContainer(container);
+		expect(font.subarray(hdmx.offset, hdmx.offset + hdmx.bufSize)).toEqual(expected);
+		let checksum = 0;
+		const view = new DataView(font.buffer, font.byteOffset, font.byteLength);
+		for (let offset = 0; offset < font.length; offset += 4) {
+			checksum = (checksum + view.getUint32(offset)) >>> 0;
+		}
+		expect(checksum).toBe(0xb1b0afba);
+	});
+
+	it.each(['hdmx', 'VDMX'])('rejects truncated %s instead of dropping it', (tag) => {
+		const s0 = buildMinimalCTFStream0([{ tag, data: new Uint8Array([0]) }]);
+		expect(() => parseCTF([s0, new Stream(null, 0), new Stream(null, 0)])).toThrow(EotError);
 	});
 
 	it('omits droppedTables when nothing is dropped', () => {

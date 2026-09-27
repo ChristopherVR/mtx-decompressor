@@ -116,8 +116,7 @@ export function unpackMtx(
  * @param options.compressed  If `false`, skip decompression and return the
  *                            (possibly decrypted) data as-is.
  * @param options.onWarn      Optional hook invoked with a message for each
- *                            non-fatal diagnostic (e.g. a dropped hdmx/VDMX
- *                            table). The font is still produced.
+ *                            non-fatal diagnostic. The font is still produced.
  * @returns A `Uint8Array` containing a valid TrueType (.ttf) font.
  */
 export function decompressMtx(
