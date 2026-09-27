@@ -81,7 +81,7 @@ function setDistRange(length: number) {
 		// Defense-in-depth: cap numDistRanges to prevent runaway loop or
 		// out-of-range left-shifts when `length` is corrupted.
 		if (numDistRanges > 8) {
-			throw new Error('LZCOMP setDistRange: numDistRanges exceeds bound (8)');
+			throw new EotError(EotErrorCode.MtxError, 'LZCOMP setDistRange: numDistRanges exceeds bound (8)');
 		}
 		distMax = DIST_MIN + ((1 << (DIST_WIDTH * numDistRanges)) - 1);
 	}
@@ -152,7 +152,7 @@ function decodeLength(lenEcoder: AHuff, symbol: number, numDistRangesOut: number
 		// Defense-in-depth: cap iteration count to prevent unbounded loops on
 		// adversarial input (each chunk is 3 bits ⇒ 16 chunks ≫ any sane length).
 		if (++iters > 16) {
-			throw new Error('LZCOMP decodeLength: iteration cap exceeded');
+			throw new EotError(EotErrorCode.MtxError, 'LZCOMP decodeLength: iteration cap exceeded');
 		}
 		let bits: number;
 
@@ -238,7 +238,7 @@ export function lzcompDecompress(data: Uint8Array, size: number, version: number
 	// Cap declared output length so a hostile stream cannot allocate huge
 	// buffers (sliding window + outBuf are sized from this value).
 	if (outLen > MAX_OUT_LEN) {
-		throw new Error(`LZCOMP outLen ${outLen} exceeds maximum (${MAX_OUT_LEN})`);
+		throw new EotError(EotErrorCode.MtxError, `LZCOMP outLen ${outLen} exceeds maximum (${MAX_OUT_LEN})`);
 	}
 
 	// --- Compute distance-range parameters ---------------------------------
@@ -275,7 +275,7 @@ export function lzcompDecompress(data: Uint8Array, size: number, version: number
 			if (outIdx >= outBufSize) {
 				outBufSize += outBufSize >>> 1;
 				if (outBufSize > MAX_OUT) {
-					throw new Error('LZCOMP output exceeds maximum size budget');
+					throw new EotError(EotErrorCode.MtxError, 'LZCOMP output exceeds maximum size budget');
 				}
 				const tmp = new Uint8Array(outBufSize);
 				tmp.set(outBuf);
@@ -300,7 +300,7 @@ export function lzcompDecompress(data: Uint8Array, size: number, version: number
 					if (outIdx >= outBufSize) {
 						outBufSize += outBufSize >>> 1;
 						if (outBufSize > MAX_OUT) {
-							throw new Error('LZCOMP output exceeds maximum size budget');
+							throw new EotError(EotErrorCode.MtxError, 'LZCOMP output exceeds maximum size budget');
 						}
 						const tmp = new Uint8Array(outBufSize);
 						tmp.set(outBuf);
@@ -317,7 +317,7 @@ export function lzcompDecompress(data: Uint8Array, size: number, version: number
 					if (outIdx >= outBufSize) {
 						outBufSize += outBufSize >>> 1;
 						if (outBufSize > MAX_OUT) {
-							throw new Error('LZCOMP output exceeds maximum size budget');
+							throw new EotError(EotErrorCode.MtxError, 'LZCOMP output exceeds maximum size budget');
 						}
 						const tmp = new Uint8Array(outBufSize);
 						tmp.set(outBuf);
@@ -335,7 +335,7 @@ export function lzcompDecompress(data: Uint8Array, size: number, version: number
 				if (outIdx + rleCount > outBufSize) {
 					outBufSize = outIdx + rleCount + (outBufSize >>> 1);
 					if (outBufSize > MAX_OUT) {
-						throw new Error('LZCOMP output exceeds maximum size budget');
+						throw new EotError(EotErrorCode.MtxError, 'LZCOMP output exceeds maximum size budget');
 					}
 					const tmp = new Uint8Array(outBufSize);
 					tmp.set(outBuf);

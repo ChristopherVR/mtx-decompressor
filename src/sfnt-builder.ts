@@ -63,7 +63,10 @@ function writeOffsetTable(ctr: SFNTContainer, out: Stream): void {
  *   bufSize   U32
  */
 function writeTableDirectory(ctr: SFNTContainer, out: Stream): void {
-	for (const table of ctr.tables) {
+	// SFNT directory records are required to be sorted by tag. Keep the
+	// container's table order intact because its offsets are assigned as data
+	// is written below.
+	for (const table of [...ctr.tables].sort((a, b) => (a.tag < b.tag ? -1 : a.tag > b.tag ? 1 : 0))) {
 		// tag — 4 ASCII bytes
 		out.writeU8(table.tag.charCodeAt(0));
 		out.writeU8(table.tag.charCodeAt(1));
@@ -94,7 +97,9 @@ function writeTableCheckingSum(table: SFNTTable, out: Stream): void {
 
 	for (let i = 0; i < fullWords; i++) {
 		const off = i * 4;
-		const word =
+		// The head checksum is defined with checksumAdjustment treated as zero.
+		const isAdjustmentWord = table.tag === 'head' && off === 8;
+		const word = isAdjustmentWord ? 0 :
 			((data[off] << 24) | (data[off + 1] << 16) | (data[off + 2] << 8) | data[off + 3]) >>> 0;
 		checksum = (checksum + word) >>> 0;
 		out.writeU32(word);
@@ -111,6 +116,17 @@ function writeTableCheckingSum(table: SFNTTable, out: Stream): void {
 	}
 
 	table.checksum = checksum;
+}
+
+function validateTables(ctr: SFNTContainer): void {
+	for (const table of ctr.tables) {
+		if (!Number.isInteger(table.bufSize) || table.bufSize < 0 || table.bufSize > table.buf.length) {
+			throw new EotError(EotErrorCode.CorruptFile, `table ${table.tag} has an invalid buffer size`);
+		}
+		if (table.tag === 'head' && table.bufSize < 12) {
+			throw new EotError(EotErrorCode.MalformedHeadTable, 'head table is too short for checksumAdjustment');
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -152,6 +168,7 @@ function getRequiredSize(ctr: SFNTContainer): number {
  *  7. Return the assembled bytes.
  */
 export function dumpContainer(ctr: SFNTContainer): Uint8Array {
+	validateTables(ctr);
 	const requiredSize = getRequiredSize(ctr);
 	const out = new Stream(new Uint8Array(requiredSize), 0);
 

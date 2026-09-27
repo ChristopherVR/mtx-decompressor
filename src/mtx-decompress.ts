@@ -10,6 +10,7 @@ import { parseCTF } from './ctf-parser';
 import { lzcompDecompress } from './lzcomp';
 import { dumpContainer } from './sfnt-builder';
 import { Stream } from './stream';
+import { EotError, EotErrorCode } from './errors';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -45,8 +46,23 @@ export function unpackMtx(
 	size: number,
 ): { streams: Uint8Array[]; sizes: number[] } {
 	// --- Validate buffer & header ------------------------------------------
-	if (size < 10 || data.length < 10) {
-		throw new Error('MTX data too small: header requires at least 10 bytes');
+	if (data.length < 10) {
+		throw new EotError(EotErrorCode.InsufficientBytes, 'MTX data too small: header requires at least 10 bytes');
+	}
+	if (!Number.isInteger(size)) {
+		throw new EotError(
+			EotErrorCode.MtxError,
+			`MTX data size must be an integer: size=${size}`,
+		);
+	}
+	if (size < 10) {
+		throw new EotError(EotErrorCode.InsufficientBytes, 'MTX data too small: header requires at least 10 bytes');
+	}
+	if (size > data.length) {
+		throw new EotError(
+			EotErrorCode.InsufficientBytes,
+			`MTX data size exceeds the input buffer: size=${size}, data.length=${data.length}`,
+		);
 	}
 
 	// --- Read 10-byte MTX header -------------------------------------------
@@ -59,7 +75,8 @@ export function unpackMtx(
 
 	// Validate offset ordering: 10 <= offset2 <= offset3 <= size
 	if (offset2 < 10 || offset3 < offset2 || offset3 > size) {
-		throw new Error(
+		throw new EotError(
+			EotErrorCode.MtxError,
 			`MTX header offsets out of bounds: offset2=${offset2}, offset3=${offset3}, size=${size}`,
 		);
 	}
@@ -77,7 +94,7 @@ export function unpackMtx(
 	const decompressedSizes: number[] = [];
 
 	for (let i = 0; i < 3; i++) {
-		const block = data.subarray(offsets[i]);
+		const block = data.subarray(offsets[i], offsets[i] + blockSizes[i]);
 		const decompressed = lzcompDecompress(block, blockSizes[i], versionMagic);
 		streams.push(decompressed);
 		decompressedSizes.push(decompressed.length);

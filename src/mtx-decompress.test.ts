@@ -1,6 +1,7 @@
 import { describe, it, expect, expectTypeOf } from 'vitest';
 
 import { decompressMtx, decompressEotFont, unpackMtx } from './mtx-decompress';
+import { EotError, EotErrorCode } from './errors';
 
 describe('decompressMtx', () => {
 	// -----------------------------------------------------------------------
@@ -90,7 +91,50 @@ describe('unpackMtx', () => {
 
 	it('throws when given too-small data for header', () => {
 		const tiny = new Uint8Array(4);
-		expect(() => unpackMtx(tiny, 4)).toThrow();
+		expect(() => unpackMtx(tiny, 4)).toThrowError(
+			new EotError(EotErrorCode.InsufficientBytes, 'MTX data too small: header requires at least 10 bytes'),
+		);
+	});
+
+	it('rejects a declared size larger than the input buffer', () => {
+		const data = new Uint8Array(10);
+		try {
+			unpackMtx(data, 11);
+			expect.fail('expected oversized input to throw');
+		} catch (error) {
+			expect(error).toBeInstanceOf(EotError);
+			expect((error as EotError).code).toBe(EotErrorCode.InsufficientBytes);
+			expect((error as Error).message).toContain('size=11, data.length=10');
+		}
+	});
+
+	it.each([9.5, 10.5, Number.NaN, Number.POSITIVE_INFINITY])('rejects non-integer size %s', (size) => {
+		const data = new Uint8Array(16);
+		try {
+			unpackMtx(data, size);
+			expect.fail('expected invalid size to throw');
+		} catch (error) {
+			expect(error).toBeInstanceOf(EotError);
+			expect((error as EotError).code).toBe(EotErrorCode.MtxError);
+		}
+	});
+
+	it('rejects offsets beyond the declared input size with a typed MTX error', () => {
+		const data = new Uint8Array(20);
+		// offset2 = 10, offset3 = 21
+		data[4] = 0;
+		data[5] = 0;
+		data[6] = 10;
+		data[7] = 0;
+		data[8] = 0;
+		data[9] = 21;
+		try {
+			unpackMtx(data, 20);
+			expect.fail('expected invalid offsets to throw');
+		} catch (error) {
+			expect(error).toBeInstanceOf(EotError);
+			expect((error as EotError).code).toBe(EotErrorCode.MtxError);
+		}
 	});
 
 	it('parses the 10-byte MTX header correctly', () => {

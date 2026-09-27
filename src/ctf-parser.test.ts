@@ -20,6 +20,45 @@ function minimalMaxp(): Uint8Array {
 	return s.toUint8Array();
 }
 
+/** Build one large composite glyph to exercise loca offset boundaries. */
+function largeCompositeGlyph(componentCount: number, extraScaleBytes = 0): Uint8Array {
+	const s = new Stream(null, 0);
+	s.writeS16(-1); // composite glyph
+	for (let i = 0; i < 4; i++) s.writeS16(0); // bbox
+	for (let i = 0; i < componentCount; i++) {
+		const last = i === componentCount - 1;
+		const hasScale = last && extraScaleBytes > 0;
+		const transformFlag = extraScaleBytes === 2 ? 0x0008 : 0x0040;
+		s.writeU16((last ? 0 : 0x0020) | (hasScale ? transformFlag : 0)); // component flags
+		s.writeU16(0); // glyph index
+		s.writeU8(0); // x argument
+		s.writeU8(0); // y argument
+		if (hasScale) {
+			s.writeS16(0x4000);
+			if (extraScaleBytes === 4) s.writeS16(0x4000);
+		}
+	}
+	return s.toUint8Array();
+}
+
+function parseCompositeForLoca(glyphData: Uint8Array) {
+	const head = minimalHead();
+	const maxp = minimalMaxp();
+	maxp[4] = 0;
+	maxp[5] = 1; // numGlyphs = 1
+	maxp[28] = 0xff;
+	maxp[29] = 0xff; // generous maxComponentElements
+	return parseCTF([
+		buildMinimalCTFStream0([
+			{ tag: 'glyf', data: glyphData },
+			{ tag: 'head', data: head },
+			{ tag: 'maxp', data: maxp },
+		]),
+		new Stream(null, 0),
+		new Stream(null, 0),
+	]);
+}
+
 /**
  * Ensure the structural tables parseCTF requires (head, maxp, hmtx) are
  * present, injecting minimal versions for any the caller did not supply.
@@ -192,6 +231,42 @@ describe('parseCTF', () => {
 		expect(head.buf[9]).toBe(0);
 		expect(head.buf[10]).toBe(0);
 		expect(head.buf[11]).toBe(0);
+	});
+
+	it('keeps short loca at the maximum representable offset', () => {
+		// 10-byte composite header + 21843 six-byte components + a two-byte scale
+		// field gives an even final offset of exactly 131070.
+		const container = parseCompositeForLoca(largeCompositeGlyph(21843, 2));
+		const loca = container.tables.find((t) => t.tag === 'loca')!;
+		const head = container.tables.find((t) => t.tag === 'head')!;
+		expect(loca.bufSize).toBe(4);
+		expect(loca.buf[2] * 256 + loca.buf[3]).toBe(65535);
+		expect(head.buf[50]).toBe(0);
+		expect(head.buf[51]).toBe(0);
+	});
+
+	it('promotes short loca when reconstructed glyf exceeds 131070 bytes', () => {
+		const container = parseCompositeForLoca(largeCompositeGlyph(21843, 4));
+		const loca = container.tables.find((t) => t.tag === 'loca')!;
+		const head = container.tables.find((t) => t.tag === 'head')!;
+		const finalOffset =
+			loca.buf[4] * 0x1000000 +
+			loca.buf[5] * 0x10000 +
+			loca.buf[6] * 0x100 +
+			loca.buf[7];
+		expect(finalOffset).toBe(131072);
+		expect(loca.bufSize).toBe(8);
+		expect(head.buf[50]).toBe(0);
+		expect(head.buf[51]).toBe(1);
+	});
+
+	it('rejects an invalid head indexToLocFormat', () => {
+		const head = minimalHead();
+		head[51] = 2;
+		const s0 = buildMinimalCTFStream0([{ tag: 'head', data: head }]);
+		expect(() => parseCTF([s0, new Stream(null, 0), new Stream(null, 0)])).toThrow(
+			/malformed head table|invalid head indexToLocFormat/i,
+		);
 	});
 
 	// -----------------------------------------------------------------------

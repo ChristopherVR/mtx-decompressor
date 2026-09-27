@@ -713,7 +713,7 @@ function decodeGlyph(streams: Stream[], out: Stream): void {
 function populateGlyfAndLoca(
 	glyf: SFNTTable,
 	loca: SFNTTable,
-	headData: { indexToLocFormat: number },
+	headData: HeadData,
 	maxpData: {
 		numGlyphs: number;
 		maxPoints: number;
@@ -746,18 +746,10 @@ function populateGlyfAndLoca(
 	const outStream = new Stream(null, 0);
 	outStream.reserve(numGlyphs * 256); // rough initial reservation
 
-	// Short loca format: (numGlyphs + 1) × U16; Long format: (numGlyphs + 1) × U32
-	const isShortLoca = headData.indexToLocFormat === 0;
-	const locaEntrySize = isShortLoca ? 2 : 4;
-	const locaStream = new Stream(null, 0);
-	locaStream.reserve((numGlyphs + 1) * locaEntrySize);
-
-	// Write initial loca entry (offset 0)
-	if (isShortLoca) {
-		locaStream.writeU16(0);
-	} else {
-		locaStream.writeU32(0);
-	}
+	// Collect byte offsets first. A short loca can only represent offsets up
+	// to 131070 bytes (stored as offset / 2), so its format may need promotion
+	// after the reconstructed glyf data is known.
+	const locaOffsets = [0];
 
 	for (let i = 0; i < numGlyphs; i++) {
 		const _glyphStart = outStream.pos;
@@ -772,12 +764,23 @@ function populateGlyfAndLoca(
 			outStream.writeU8(0);
 		}
 
-		// Write loca entry for the *end* of this glyph (= start of next)
-		if (isShortLoca) {
-			// Short format stores offset / 2
-			locaStream.writeU16(outStream.pos >>> 1);
+		// Record the end of this glyph (= start of next).
+		locaOffsets.push(outStream.pos);
+	}
+
+	const useLongLoca = headData.indexToLocFormat === 1 || outStream.pos > 131070;
+	if (useLongLoca && headData.indexToLocFormat === 0) {
+		headData.table.buf[50] = 0;
+		headData.table.buf[51] = 1;
+		headData.indexToLocFormat = 1;
+	}
+	const locaStream = new Stream(null, 0);
+	locaStream.reserve((numGlyphs + 1) * (useLongLoca ? 4 : 2));
+	for (const offset of locaOffsets) {
+		if (useLongLoca) {
+			locaStream.writeU32(offset);
 		} else {
-			locaStream.writeU32(outStream.pos);
+			locaStream.writeU16(offset / 2);
 		}
 	}
 
@@ -796,6 +799,7 @@ function populateGlyfAndLoca(
 /** Parsed fields from the `head` table. */
 interface HeadData {
 	indexToLocFormat: number;
+	table: SFNTTable;
 }
 
 /**
@@ -806,7 +810,14 @@ interface HeadData {
 function parseHead(table: SFNTTable): HeadData {
 	const s = new Stream(table.buf, table.bufSize);
 	s.seekAbsolute(50);
-	return { indexToLocFormat: s.readS16() };
+	const indexToLocFormat = s.readS16();
+	if (indexToLocFormat !== 0 && indexToLocFormat !== 1) {
+		throw new EotError(
+			EotErrorCode.MalformedHeadTable,
+			`invalid head indexToLocFormat: ${indexToLocFormat}`,
+		);
+	}
+	return { indexToLocFormat, table };
 }
 
 /** Parsed fields from the `maxp` table. */

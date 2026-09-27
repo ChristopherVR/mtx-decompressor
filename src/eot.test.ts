@@ -1,4 +1,5 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+import * as mtx from './mtx-decompress';
 
 import {
 	parseEotMetadata,
@@ -210,6 +211,32 @@ describe('parseEotMetadata', () => {
 });
 
 describe('eotToTtf', () => {
+	it('reports a recovered header-version mismatch while returning the font', () => {
+		const fontData = new Uint8Array([1, 2, 3]);
+		const eot = buildEot({ version: 2, rootString: 'X', versionMagicOverride: VERSION_MAGIC[1], fontData });
+		const warnings: string[] = [];
+		expect(eotToTtf(eot, { onWarn: (message) => warnings.push(message) })).toEqual(fontData);
+		expect(warnings).toHaveLength(1);
+		expect(warnings[0]).toContain('version 2');
+	});
+
+	it('forwards decompression warnings and container flags', () => {
+		const onWarn = vi.fn();
+		const fontData = new Uint8Array([1, 2, 3]);
+		const decode = vi.spyOn(mtx, 'decompressMtx').mockImplementation((data, options) => {
+			options?.onWarn?.('Ignoring hdmx table');
+			return data;
+		});
+		try {
+			const eot = buildEot({ flags: TTEMBED_TTCOMPRESSED | TTEMBED_XORENCRYPTDATA, fontData });
+			expect(eotToTtf(eot, { onWarn })).toEqual(fontData);
+			expect(decode).toHaveBeenCalledWith(fontData, { compressed: true, encrypted: true, onWarn });
+			expect(onWarn).toHaveBeenCalledExactlyOnceWith('Ignoring hdmx table');
+		} finally {
+			decode.mockRestore();
+		}
+	});
+
 	it('returns the raw font data when neither compressed nor encrypted', () => {
 		const fontData = new Uint8Array([0x11, 0x22, 0x33, 0x44]);
 		const eot = buildEot({ flags: 0, fontData });

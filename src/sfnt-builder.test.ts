@@ -101,6 +101,18 @@ describe('dumpContainer', () => {
 		expect(tag).toBe('head');
 	});
 
+	it('sorts directory entries by tag without reordering table data writes', () => {
+		const testTable = makeTable('test', new Uint8Array([0xde, 0xad, 0xbe, 0xef]));
+		const headTable = makeHead();
+		const result = dumpContainer({ tables: [testTable, headTable] });
+		const firstTag = String.fromCharCode(...result.subarray(12, 16));
+		const secondTag = String.fromCharCode(...result.subarray(28, 32));
+		expect([firstTag, secondTag]).toEqual(['head', 'test']);
+		const testEntry = firstTag === 'test' ? 12 : 28;
+		expect(readU32(result, readU32(result, testEntry + 8))).toBe(0xdeadbeef);
+		expect(testTable.offset).toBeLessThan(headTable.offset);
+	});
+
 	it('writes correct table size in directory', () => {
 		const ctr: SFNTContainer = {
 			tables: [makeHead(42)],
@@ -117,13 +129,13 @@ describe('dumpContainer', () => {
 	it('embeds table data in the output', () => {
 		const data = new Uint8Array([0xde, 0xad, 0xbe, 0xef]);
 		const ctr: SFNTContainer = {
-			// 'test' is first, so its directory entry / data stay at the front;
-			// head is required by dumpContainer and lives after it.
+			// Input data remains in input order even though directory records sort by tag.
 			tables: [makeTable('test', data), makeHead()],
 		};
 		const result = dumpContainer(ctr);
 		// Table data starts after header (12) + directory (2*16)
-		const dataOffset = readU32(result, 12 + 8); // offset field of the first directory entry
+		const testEntry = String.fromCharCode(...result.subarray(12, 16)) === 'test' ? 12 : 28;
+		const dataOffset = readU32(result, testEntry + 8);
 		expect(readU32(result, dataOffset)).toBe(0xdeadbeef);
 	});
 
@@ -167,6 +179,35 @@ describe('dumpContainer', () => {
 		// We just verify it's been written (non-zero likely) and is a valid U32.
 		expect(csAdj).toBeDefined();
 		expectTypeOf(csAdj).toBeNumber();
+	});
+
+	it('ignores an input checksumAdjustment when calculating the final adjustment', () => {
+		const headData = new Uint8Array(54);
+		headData.set([0x12, 0x34, 0x56, 0x78], 8);
+		const result = dumpContainer({ tables: [makeTable('head', headData)] });
+		let sum = 0;
+		for (let off = 0; off < result.length; off += 4) sum = (sum + readU32(result, off)) >>> 0;
+		expect(sum).toBe(0xb1b0afba);
+	});
+
+	it('rejects a head table too short for checksumAdjustment', () => {
+		expect(() => dumpContainer({ tables: [makeHead(11)] })).toThrowError(EotError);
+		try {
+			dumpContainer({ tables: [makeHead(11)] });
+		} catch (error) {
+			expect((error as EotError).code).toBe(EotErrorCode.MalformedHeadTable);
+		}
+	});
+
+	it('rejects a declared table size larger than its buffer', () => {
+		const table = makeTable('name', new Uint8Array(3));
+		table.bufSize = 4;
+		expect(() => dumpContainer({ tables: [table, makeHead()] })).toThrowError(EotError);
+		try {
+			dumpContainer({ tables: [table, makeHead()] });
+		} catch (error) {
+			expect((error as EotError).code).toBe(EotErrorCode.CorruptFile);
+		}
 	});
 
 	// -----------------------------------------------------------------------

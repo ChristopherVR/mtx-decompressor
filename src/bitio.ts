@@ -1,3 +1,5 @@
+import { EotError, EotErrorCode } from './errors';
+
 /**
  * BitIO - MSB-first bit-level reader from a Uint8Array buffer.
  *
@@ -45,7 +47,7 @@ export class BitIO {
 			// state so a caught end-of-data error leaves the reader consistent
 			// (a retry throws again rather than returning a stale bit).
 			if (this.index >= this.size) {
-				throw new Error('BitIO: end of data');
+				throw new EotError(EotErrorCode.InsufficientBytes, 'BitIO: end of data');
 			}
 			this.bitBuffer = this.data[this.index++];
 			this.bitCount = 8;

@@ -4,7 +4,7 @@
  * Ported from libeot (MPL 2.0) — src/EOT.c. Parses the little-endian EOT
  * header that wraps MTX-compressed font data, derives where the font data
  * begins, and exposes the compression/encryption flags so callers no longer
- * have to guess them. `eotToTtf` chains this into {@link decompressEotFont} to
+ * have to guess them. `eotToTtf` chains this into {@link decompressMtx} to
  * turn a raw `.eot` file straight into a TrueType binary.
  *
  * Note: every field in the EOT header is LITTLE-endian, unlike the big-endian
@@ -13,7 +13,7 @@
  * @see http://www.w3.org/Submission/EOT/
  */
 
-import { decompressEotFont } from './mtx-decompress';
+import { decompressMtx } from './mtx-decompress';
 import { EotError, EotErrorCode } from './errors';
 
 // ---------------------------------------------------------------------------
@@ -409,18 +409,30 @@ export function parseEotMetadata(bytes: Uint8Array): EotMetadata {
  * Decode a raw EOT container straight into a TrueType (.ttf) font binary.
  *
  * Parses the header, locates and slices the embedded font data, and runs it
- * through {@link decompressEotFont} using the container's own
+ * through {@link decompressMtx} using the container's own
  * compressed/encrypted flags. This is the drop-in equivalent of libeot's
  * `EOT2ttf_*` entry points.
  *
  * @param bytes Raw `.eot` file bytes.
  * @returns The reconstructed TrueType font.
+ * @param options.onWarn Called for recovered header-version mismatches and
+ * non-fatal decompression diagnostics, including dropped tables.
  * @throws {EotError} on a corrupt container or during decompression.
  */
-export function eotToTtf(bytes: Uint8Array): Uint8Array {
+export function eotToTtf(
+	bytes: Uint8Array,
+	options?: { onWarn?: (message: string) => void },
+): Uint8Array {
 	const meta = parseEotMetadata(bytes);
+	if (meta.badVersion) {
+		options?.onWarn?.(`EOT header version disagrees with its layout; decoded as version ${meta.version}`);
+	}
 	const fontData = bytes.subarray(meta.fontDataOffset, meta.fontDataOffset + meta.fontDataSize);
-	return decompressEotFont(fontData, meta.compressed, meta.encrypted);
+	return decompressMtx(fontData, {
+		compressed: meta.compressed,
+		encrypted: meta.encrypted,
+		onWarn: options?.onWarn,
+	});
 }
 
 /**

@@ -63,11 +63,14 @@ apart.
 
 ## API
 
-### `eotToTtf(eotBytes)`
+### `eotToTtf(eotBytes, options?)`
 
 Parse a raw EOT container and return the reconstructed TrueType binary. Handles
 header parsing, font-data extraction, and the container's compression/encryption
 flags. Throws `EotError` on a corrupt or truncated container.
+
+Pass `{ onWarn: (message) => console.warn(message) }` to receive diagnostics
+for recovered header-version mismatches and dropped tables during decompression.
 
 ### `parseEotMetadata(eotBytes)`
 
@@ -108,6 +111,13 @@ The exported `SFNTContainer` and `SFNTTable` types describe the reconstructed fo
 ## How it works
 
 The pipeline: EOT container parsing (little-endian header → font-data offset + flags) → optional XOR decryption → MTX header parsing (splits into three LZCOMP blocks) → LZCOMP decompression (sliding-window LZ with adaptive Huffman coding) → CTF parsing (reconstructs TrueType tables from the three Compact TrueType Font streams) → SFNT assembly (table directory, alignment, checksums).
+
+Reconstruction automatically promotes short `loca` offsets to the long format
+when the expanded glyph data exceeds 131,070 bytes, updating `head` accordingly.
+The assembled font has a sorted table directory and recalculated checksums.
+
+The decoder still omits `hdmx` and `VDMX` tables. Use `onWarn` to surface these
+omissions; `parseCTF` also lists their tags in `droppedTables`.
 
 ## Provenance
 

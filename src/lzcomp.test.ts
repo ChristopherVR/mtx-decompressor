@@ -1,6 +1,7 @@
 import { describe, it, expect, expectTypeOf } from 'vitest';
 
 import { lzcompDecompress } from './lzcomp';
+import { EotError, EotErrorCode } from './errors';
 
 /**
  * LZCOMP decompression is a complex algorithm that consumes an adaptive
@@ -31,6 +32,16 @@ describe('lzcompDecompress', () => {
 			threw = true;
 		}
 		expect(threw || result instanceof Uint8Array).toBeTruthy();
+	});
+
+	it('reports truncated compressed input as a typed insufficient-bytes error', () => {
+		expect(() => lzcompDecompress(new Uint8Array(0), 0, 1)).toThrowError(EotError);
+		try {
+			lzcompDecompress(new Uint8Array(0), 0, 1);
+			expect.fail('expected truncated input to throw');
+		} catch (error) {
+			expect((error as EotError).code).toBe(EotErrorCode.InsufficientBytes);
+		}
 	});
 
 	it('version=1 skips the run-length flag bit', () => {

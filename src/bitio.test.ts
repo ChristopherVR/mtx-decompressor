@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 
 import { BitIO } from './bitio';
+import { EotError, EotErrorCode } from './errors';
 
 describe('bitIO', () => {
 	// -----------------------------------------------------------------------
@@ -35,7 +36,9 @@ describe('bitIO', () => {
 			for (let i = 0; i < 8; i++) {
 				bio.inputBit();
 			}
-			expect(() => bio.inputBit()).toThrow('end of data');
+			expect(() => bio.inputBit()).toThrowError(
+				new EotError(EotErrorCode.InsufficientBytes, 'BitIO: end of data'),
+			);
 		});
 
 		it('handles offset into buffer', () => {

@@ -76,7 +76,8 @@ export class Stream {
 	private ensureRead(n: number): void {
 		this.ensureByteAligned();
 		if (this.pos + n > this.size) {
-			throw new Error(
+			throw new EotError(
+				EotErrorCode.InsufficientBytes,
 				`Stream: not enough data (need ${n} bytes at pos ${this.pos}, size ${this.size})`,
 			);
 		}
@@ -88,8 +89,11 @@ export class Stream {
 	// silently re-aligning). The alignment guard leaves `bitPos` at 0.
 	seekAbsolute(pos: number): void {
 		this.ensureByteAligned();
+		if (!Number.isInteger(pos) || pos < 0) {
+			throw new EotError(EotErrorCode.CorruptFile, `Stream: invalid seek position (${pos})`);
+		}
 		if (pos > this.size) {
-			throw new Error(`Stream: seek past end (${pos} > ${this.size})`);
+			throw new EotError(EotErrorCode.SeekPastEos, `Stream: seek past end (${pos} > ${this.size})`);
 		}
 		this.pos = pos;
 	}
@@ -97,11 +101,14 @@ export class Stream {
 	seekRelative(offset: number): void {
 		this.ensureByteAligned();
 		const newPos = this.pos + offset;
+		if (!Number.isInteger(offset) || !Number.isInteger(newPos)) {
+			throw new EotError(EotErrorCode.CorruptFile, `Stream: invalid relative seek (${offset})`);
+		}
 		if (newPos < 0) {
-			throw new Error('Stream: negative seek');
+			throw new EotError(EotErrorCode.CorruptFile, 'Stream: negative seek');
 		}
 		if (newPos > this.size) {
-			throw new Error('Stream: seek past end');
+			throw new EotError(EotErrorCode.SeekPastEos, 'Stream: seek past end');
 		}
 		this.pos = newPos;
 	}
@@ -229,7 +236,7 @@ export class Stream {
 		let bitsRemaining = n;
 		while (bitsRemaining > 0) {
 			if (this.pos >= this.size && this.bitPos === 0) {
-				throw new Error('Stream: not enough data for bit read');
+				throw new EotError(EotErrorCode.InsufficientBytes, 'Stream: not enough data for bit read');
 			}
 			const bitsAvailableInByte = 8 - this.bitPos;
 			const bitsToRead = Math.min(bitsRemaining, bitsAvailableInByte);
@@ -261,7 +268,7 @@ export class Stream {
 		this.ensureByteAligned();
 		dest.ensureByteAligned();
 		if (this.pos + length > this.size) {
-			throw new Error('Stream: not enough data for copy');
+			throw new EotError(EotErrorCode.InsufficientBytes, 'Stream: not enough data for copy');
 		}
 		const needed = dest.pos + length;
 		if (needed > dest.reserved) {

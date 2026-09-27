@@ -67,6 +67,15 @@ describe('stream', () => {
 			expect(s.readU32()).toBe(0x80000001);
 		});
 
+		it('throws INSUFFICIENT_BYTES when a byte read is truncated', () => {
+			const s = new Stream(new Uint8Array([0x12]), 1);
+			s.readU8();
+			expect(() => s.readU8()).toThrow(EotError);
+			try { s.readU8(); } catch (error) {
+				expect((error as EotError).code).toBe(EotErrorCode.InsufficientBytes);
+			}
+		});
+
 		it('readS16 reads big-endian 16-bit signed (positive)', () => {
 			const s = new Stream(new Uint8Array([0x00, 0x7f]), 2);
 			expect(s.readS16()).toBe(127);
@@ -199,7 +208,20 @@ describe('stream', () => {
 
 		it('seekAbsolute throws when seeking past end', () => {
 			const s = new Stream(new Uint8Array(5), 5);
-			expect(() => s.seekAbsolute(6)).toThrow('seek past end');
+			expect(() => s.seekAbsolute(6)).toThrow(EotError);
+			try { s.seekAbsolute(6); } catch (error) {
+				expect((error as EotError).code).toBe(EotErrorCode.SeekPastEos);
+			}
+		});
+
+		it('rejects negative and non-integer absolute seek positions as corrupt input', () => {
+			const s = new Stream(new Uint8Array(5), 5);
+			for (const pos of [-1, 1.5]) {
+				expect(() => s.seekAbsolute(pos)).toThrow(EotError);
+				try { s.seekAbsolute(pos); } catch (error) {
+					expect((error as EotError).code).toBe(EotErrorCode.CorruptFile);
+				}
+			}
 		});
 
 		it('seekRelative moves position by offset', () => {
@@ -212,7 +234,22 @@ describe('stream', () => {
 		it('seekRelative throws on negative result', () => {
 			const s = new Stream(new Uint8Array(10), 10);
 			s.pos = 2;
-			expect(() => s.seekRelative(-3)).toThrow('negative seek');
+			expect(() => s.seekRelative(-3)).toThrow(EotError);
+			try { s.seekRelative(-3); } catch (error) {
+				expect((error as EotError).code).toBe(EotErrorCode.CorruptFile);
+			}
+		});
+
+		it('seekRelative reports past-end and non-integer positions with typed errors', () => {
+			const s = new Stream(new Uint8Array(4), 4);
+			expect(() => s.seekRelative(5)).toThrow(EotError);
+			try { s.seekRelative(5); } catch (error) {
+				expect((error as EotError).code).toBe(EotErrorCode.SeekPastEos);
+			}
+			expect(() => s.seekRelative(0.5)).toThrow(EotError);
+			try { s.seekRelative(0.5); } catch (error) {
+				expect((error as EotError).code).toBe(EotErrorCode.CorruptFile);
+			}
 		});
 
 		it('seekAbsoluteThroughReserve extends size into reserved space', () => {
@@ -283,7 +320,10 @@ describe('stream', () => {
 		it('throws when not enough data for bit read', () => {
 			const s = new Stream(new Uint8Array([0xff]), 1);
 			s.readNBits(8);
-			expect(() => s.readNBits(1)).toThrow('not enough data for bit read');
+			expect(() => s.readNBits(1)).toThrow(EotError);
+			try { s.readNBits(1); } catch (error) {
+				expect((error as EotError).code).toBe(EotErrorCode.InsufficientBytes);
+			}
 		});
 
 		it('reading whole bytes worth of bits leaves the stream byte-aligned', () => {
@@ -346,7 +386,10 @@ describe('stream', () => {
 			const src = new Stream(new Uint8Array([1, 2]), 2);
 			const dest = new Stream(null, 0);
 			dest.reserve(5);
-			expect(() => src.copyTo(dest, 5)).toThrow('not enough data for copy');
+			expect(() => src.copyTo(dest, 5)).toThrow(EotError);
+			try { src.copyTo(dest, 5); } catch (error) {
+				expect((error as EotError).code).toBe(EotErrorCode.InsufficientBytes);
+			}
 		});
 
 		it('throws OUT_OF_RESERVED_SPACE when destination lacks capacity', () => {
