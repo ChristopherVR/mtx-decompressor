@@ -3,3 +3,5 @@ dist/
 site/
 *.tsbuildinfo
 .DS_Store
+docs/.vitepress/dist/
+docs/.vitepress/cache/
