@@ -7,7 +7,7 @@
  * @see http://www.w3.org/Submission/MTX/
  */
 
-import { EotError, EotErrorCode } from './errors';
+import { EotError, EotErrorCode, emitWarning, type EotWarning } from './errors';
 import { Stream } from './stream';
 import { TRIPLET_ENCODINGS } from './triplet-encodings';
 import { decodeHdmx } from './hdmx';
@@ -48,6 +48,8 @@ export interface ParseCTFOptions {
 	 * Lets callers surface warnings without the library writing to `console`.
 	 */
 	onWarn?: (message: string) => void;
+	/** Structured variant of {@link onWarn}. */
+	onWarning?: (warning: EotWarning) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -1031,13 +1033,19 @@ export function parseCTF(streams: Stream[], options?: ParseCTFOptions): SFNTCont
 		tables[maxpIdx].buf.byteLength,
 	).getUint32(0);
 	if (maxpVersion !== 0x00010000) {
-		options?.onWarn?.(
+		emitWarning(
+			options,
+			EotErrorCode.WarnMaxpVersion,
 			`maxp version 0x${maxpVersion.toString(16)} is not 1.0; MTX carries TrueType outlines, glyph limits were not read`,
 		);
 	}
 	for (const tag of ['hhea', 'cmap', 'post', 'name', 'OS/2']) {
 		if (!tables.some((t) => t.tag === tag)) {
-			options?.onWarn?.(`CTF font has no ${tag} table; the reconstructed font may be unusable in some renderers`);
+			emitWarning(
+				options,
+				EotErrorCode.WarnMissingTable,
+				`CTF font has no ${tag} table; the reconstructed font may be unusable in some renderers`,
+			);
 		}
 	}
 

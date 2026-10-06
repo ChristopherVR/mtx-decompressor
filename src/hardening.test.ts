@@ -62,3 +62,36 @@ describe('input types', () => {
 		expect(await eotToTtfAsync(new Blob([raw]))).toEqual(want);
 	});
 });
+
+describe('structured warnings', () => {
+	it('reports a code alongside the message', async () => {
+		const { EotErrorCode: Codes } = await import('./errors');
+		const seen: { code: string; message: string }[] = [];
+		const plain: string[] = [];
+		decompressMtx(new Uint8Array([1, 2, 3, 4]), {
+			compressed: false,
+			onWarn: (m) => plain.push(m),
+			onWarning: (w) => seen.push(w),
+		});
+		expect(seen).toHaveLength(1);
+		expect(seen[0].code).toBe(Codes.WarnNotSfnt);
+		expect(plain).toEqual([seen[0].message]);
+	});
+
+	it('flags warning codes via EotError.isWarning', () => {
+		expect(new EotError(EotErrorCode.WarnMissingTable, 'x').isWarning).toBe(true);
+		expect(new EotError(EotErrorCode.CorruptFile, 'x').isWarning).toBe(false);
+	});
+});
+
+describe('browser safety', () => {
+	it('library sources do not reference Node-only APIs', async () => {
+		const { readdirSync, readFileSync } = await import('node:fs');
+		const { join } = await import('node:path');
+		const files = readdirSync(__dirname).filter((f) => f.endsWith('.ts') && !f.includes('.test.'));
+		for (const f of files) {
+			const src = readFileSync(join(__dirname, f), 'utf8');
+			expect(src, f).not.toMatch(/from ['"]node:|require\(|\bBuffer\b|\bprocess\./);
+		}
+	});
+});

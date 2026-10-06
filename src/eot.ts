@@ -14,7 +14,7 @@
  */
 
 import { decompressMtx } from './mtx-decompress';
-import { EotError, EotErrorCode } from './errors';
+import { EotError, EotErrorCode, emitWarning, type EotWarning } from './errors';
 
 // ---------------------------------------------------------------------------
 // EOT header flags (flags.h)
@@ -82,6 +82,14 @@ export interface EotMetadata {
 	compressed: boolean;
 	/** True when the font data is XOR-encrypted (`flags & TTEMBED_XORENCRYPTDATA`). */
 	encrypted: boolean;
+	/** Version 3 only: checksum of the root string (0 otherwise). */
+	rootStringChecksum: number;
+	/** Version 3 only: EUDC code page (0 otherwise). */
+	eudcCodePage: number;
+	/** Version 3 only: EUDC flags (0 otherwise). */
+	eudcFlags: number;
+	/** Version 3 only: embedded EUDC font data, when present. */
+	eudcFontData?: Uint8Array;
 	/** True when the font is a subset of the original (`flags & TTEMBED_SUBSET`). */
 	subset: boolean;
 	/**
@@ -283,18 +291,23 @@ function parseBody(
 	const fullName = sc.string();
 
 	let rootString = '';
+	let rootStringChecksum = 0;
+	let eudcCodePage = 0;
+	let eudcFlags = 0;
+	let eudcFontData: Uint8Array | undefined;
 	if (version > 1) {
 		sc.skip(2); // Padding5
 		rootString = sc.string();
 
 		if (version === 3) {
-			sc.u32(); // root string checksum (discarded)
-			sc.u32(); // EUDC code page
+			rootStringChecksum = sc.u32();
+			eudcCodePage = sc.u32();
 			sc.skip(2); // Padding6
 			const signatureSize = sc.u16();
 			sc.skip(signatureSize); // signature (reserved)
-			sc.u32(); // EUDC flags
-			sc.byteArray(); // EUDC font data (unused here)
+			eudcFlags = sc.u32();
+			const eudc = sc.byteArray();
+			eudcFontData = eudc.length > 0 ? eudc.slice() : undefined;
 		}
 	}
 
@@ -322,6 +335,10 @@ function parseBody(
 		versionName,
 		fullName,
 		rootString,
+		rootStringChecksum,
+		eudcCodePage,
+		eudcFlags,
+		eudcFontData,
 		totalSize,
 		fontDataSize,
 		fontDataOffset,
@@ -473,6 +490,8 @@ export function inspectEotProtection(input: BinaryInput): EotProtection {
 /** Options for {@link eotToTtf}. */
 export interface EotToTtfOptions {
 	onWarn?: (message: string) => void;
+	/** Structured variant of {@link onWarn}: receives `{ code, message }`. */
+	onWarning?: (warning: EotWarning) => void;
 	maxOutputBytes?: number;
 }
 
@@ -498,13 +517,18 @@ export function eotToTtf(
 	const bytes = toUint8Array(input);
 	const meta = parseEotMetadata(bytes);
 	if (meta.badVersion) {
-		options?.onWarn?.(`EOT header version disagrees with its layout; decoded as version ${meta.version}`);
+		emitWarning(
+			options,
+			EotErrorCode.WarnBadVersion,
+			`EOT header version disagrees with its layout; decoded as version ${meta.version}`,
+		);
 	}
 	const fontData = bytes.subarray(meta.fontDataOffset, meta.fontDataOffset + meta.fontDataSize);
 	return decompressMtx(fontData, {
 		compressed: meta.compressed,
 		encrypted: meta.encrypted,
 		onWarn: options?.onWarn,
+		onWarning: options?.onWarning,
 		maxOutputBytes: options?.maxOutputBytes,
 	});
 }

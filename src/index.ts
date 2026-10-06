@@ -15,6 +15,7 @@ export type { DecompressOptions } from './mtx-decompress';
 export { parseCTF } from './ctf-parser';
 export type { SFNTContainer, SFNTTable, ParseCTFOptions } from './ctf-parser';
 export { EotError, EotErrorCode, EOT_WARN } from './errors';
+export type { EotWarning } from './errors';
 export {
 	parseEotMetadata,
 	inspectEotProtection,

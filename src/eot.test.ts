@@ -162,6 +162,8 @@ describe('parseEotMetadata', () => {
 		const meta = parseEotMetadata(eot);
 		expect(meta.version).toBe(3);
 		expect(meta.fullName).toBe('Times New Roman');
+		expect(meta.eudcFontData).toBeUndefined();
+		expect(meta.eudcCodePage).toBe(0);
 		expect(eot.subarray(meta.fontDataOffset, meta.fontDataOffset + meta.fontDataSize)).toStrictEqual(
 			fontData,
 		);

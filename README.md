@@ -70,7 +70,17 @@ header parsing, font-data extraction, and the container's compression/encryption
 flags. Throws `EotError` on a corrupt or truncated container.
 
 Pass `{ onWarn: (message) => console.warn(message) }` to receive diagnostics
-for recovered header-version mismatches and other non-fatal diagnostics.
+for recovered header-version mismatches and other non-fatal diagnostics, or
+`onWarning` to receive `{ code, message }` objects (`code` is an `EotErrorCode`
+such as `WarnBadVersion`, `WarnNotSfnt`, `WarnMaxpVersion` or `WarnMissingTable`).
+
+Input may be a `Uint8Array`, `ArrayBuffer` or any typed-array view. `options.maxOutputBytes`
+(default 128 MiB) caps the reconstructed font size to guard against decompression
+bombs. In browsers, `eotToTtfAsync(blobOrFile)` accepts a `Blob`/`File` directly.
+
+Any failure surfaces as an `EotError` (with the original error as `cause` when the
+failure was unexpected). The library uses no Node-only APIs (enforced by a test) and
+is exercised on Node 20, 22 and 24 in CI.
 
 ### `inspectEotProtection(eotBytes)`
 
@@ -109,6 +119,8 @@ Decompress an MTX-compressed font into a TrueType binary.
 | `options.encrypted`  | `boolean` (default: `false`) | If `true`, XOR-decrypt with key `0x50` before decompression                   |
 | `options.compressed` | `boolean` (default: `true`)  | If `false`, skip decompression and return the (possibly decrypted) data as-is |
 | `options.onWarn`     | `(message: string) => void`  | Optional hook called for each non-fatal diagnostic; the font is still produced |
+| `options.onWarning`  | `(w: EotWarning) => void`    | Same diagnostics with a machine-readable `code`                                |
+| `options.maxOutputBytes` | `number` (default 128 MiB) | Reject fonts that would reconstruct larger than this                         |
 | **Returns**          | `Uint8Array`                 | A valid TrueType (.ttf) font binary                                           |
 
 ### `decompressEotFont(fontData, compressed, encrypted)`

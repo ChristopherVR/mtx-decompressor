@@ -10,7 +10,7 @@ import { parseCTF } from './ctf-parser';
 import { lzcompDecompress } from './lzcomp';
 import { dumpContainer } from './sfnt-builder';
 import { Stream } from './stream';
-import { EotError, EotErrorCode, toEotError } from './errors';
+import { EotError, EotErrorCode, emitWarning, toEotError, type EotWarning } from './errors';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -116,6 +116,8 @@ export interface DecompressOptions {
 	encrypted?: boolean;
 	compressed?: boolean;
 	onWarn?: (message: string) => void;
+	/** Structured variant of {@link onWarn}: receives `{ code, message }`. */
+	onWarning?: (warning: EotWarning) => void;
 	/**
 	 * Upper bound on the reconstructed font size in bytes, guarding against
 	 * decompression bombs. Defaults to {@link DEFAULT_MAX_OUTPUT_BYTES}; pass
@@ -174,7 +176,11 @@ function decompressMtxUnchecked(
 		const tag = data.length >= 4 ? ((data[0] << 24) | (data[1] << 16) | (data[2] << 8) | data[3]) >>> 0 : 0;
 		// 0x00010000, 'OTTO', 'true', 'ttcf'
 		if (tag !== 0x00010000 && tag !== 0x4f54544f && tag !== 0x74727565 && tag !== 0x74746366) {
-			options?.onWarn?.('uncompressed font data does not start with a recognised sfnt signature');
+			emitWarning(
+				options,
+				EotErrorCode.WarnNotSfnt,
+				'uncompressed font data does not start with a recognised sfnt signature',
+			);
 		}
 		// Return an owned buffer, matching libeot (writeFontFile.c always copies).
 		// The encrypted branch already allocated a fresh array; the aliased
@@ -193,7 +199,7 @@ function decompressMtxUnchecked(
 	const streamObjects = streams.map((buf) => new Stream(buf, buf.length));
 
 	// --- Parse CTF structure -----------------------------------------------
-	const container = parseCTF(streamObjects, { onWarn: options?.onWarn });
+	const container = parseCTF(streamObjects, { onWarn: options?.onWarn, onWarning: options?.onWarning });
 
 	// --- Assemble final TrueType font -------------------------------------
 	return dumpContainer(container, { maxOutputBytes });
