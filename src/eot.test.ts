@@ -213,7 +213,7 @@ describe('parseEotMetadata', () => {
 
 describe('eotToTtf', () => {
 	it('reports a recovered header-version mismatch while returning the font', () => {
-		const fontData = new Uint8Array([1, 2, 3]);
+		const fontData = new Uint8Array([0, 1, 0, 0]);
 		const eot = buildEot({ version: 2, rootString: 'X', versionMagicOverride: VERSION_MAGIC[1], fontData });
 		const warnings: string[] = [];
 		expect(eotToTtf(eot, { onWarn: (message) => warnings.push(message) })).toEqual(fontData);

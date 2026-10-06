@@ -456,6 +456,11 @@ function decodeSimpleGlyph(
 	// --- Read per-point flag bytes from the glyph stream -------------------
 	// Per the W3C MTX spec and the libeot reference (parseCTF.c), flags
 	// are read in a first pass, then coordinate data in a second pass.
+	// Each point needs at least one flag byte, so a larger count is corrupt (and
+	// would otherwise drive multi-gigabyte allocations from a tiny input).
+	if (totalPoints > 0xffff || totalPoints > sGlyph.size - sGlyph.pos) {
+		throw new EotError(EotErrorCode.CorruptFile, `glyph declares implausible point count ${totalPoints}`);
+	}
 	const flagBytes = new Uint8Array(totalPoints);
 	for (let i = 0; i < totalPoints; i++) {
 		flagBytes[i] = sGlyph.readU8();
@@ -1018,6 +1023,23 @@ export function parseCTF(streams: Stream[], options?: ParseCTFOptions): SFNTCont
 	// --- Parse head and maxp for glyph decoding parameters -----------------
 	const headData: HeadData = parseHead(tables[headIdx]);
 	const maxpData: MaxpData = parseMaxp(tables[maxpIdx]);
+
+	// --- Non-fatal sanity warnings -----------------------------------------
+	const maxpVersion = new DataView(
+		tables[maxpIdx].buf.buffer,
+		tables[maxpIdx].buf.byteOffset,
+		tables[maxpIdx].buf.byteLength,
+	).getUint32(0);
+	if (maxpVersion !== 0x00010000) {
+		options?.onWarn?.(
+			`maxp version 0x${maxpVersion.toString(16)} is not 1.0; MTX carries TrueType outlines, glyph limits were not read`,
+		);
+	}
+	for (const tag of ['hhea', 'cmap', 'post', 'name', 'OS/2']) {
+		if (!tables.some((t) => t.tag === tag)) {
+			options?.onWarn?.(`CTF font has no ${tag} table; the reconstructed font may be unusable in some renderers`);
+		}
+	}
 
 	// Metric tables use their own LSB-first prediction-error encoding. Decode
 	// after loading all dependencies, regardless of table-directory order.

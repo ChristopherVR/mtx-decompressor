@@ -191,7 +191,8 @@ describe('parseCTF', () => {
 		expect(name.buf).toStrictEqual(new Uint8Array([0xaa, 0xbb]));
 
 		expect(container.droppedTables).toBeUndefined();
-		expect(warnings).toHaveLength(0);
+		// Only the expected "missing recommended table" notices for this minimal font.
+		expect(warnings.filter((m) => !/has no (hhea|cmap|post|name|OS\/2) table/.test(m))).toHaveLength(0);
 	});
 
 	it('reconstructs compressed VDMX records', () => {

@@ -82,6 +82,8 @@ export interface EotMetadata {
 	compressed: boolean;
 	/** True when the font data is XOR-encrypted (`flags & TTEMBED_XORENCRYPTDATA`). */
 	encrypted: boolean;
+	/** True when the font is a subset of the original (`flags & TTEMBED_SUBSET`). */
+	subset: boolean;
 	/**
 	 * True when the version magic in the file disagreed with the version that
 	 * actually parsed cleanly. The font is still usable (libeot returns
@@ -248,7 +250,7 @@ function parseBody(
 	version: EotVersion,
 	totalSize: number,
 	fontDataSize: number,
-): Omit<EotMetadata, 'compressed' | 'encrypted' | 'badVersion'> {
+): Omit<EotMetadata, 'compressed' | 'encrypted' | 'subset' | 'badVersion'> {
 	const HEADER_START = 12;
 	// The header body is bounded by where the font data must begin.
 	const limit = bytes.length - fontDataSize;
@@ -336,6 +338,25 @@ const VERSION_MAGIC: Record<number, EotVersion> = {
 	0x00020002: 3,
 };
 
+/** Any binary input the public API accepts. */
+export type BinaryInput = Uint8Array | ArrayBuffer | ArrayBufferView;
+
+/** Structural stand-in for `Blob`/`File` (this package does not depend on the DOM lib). */
+export interface BlobLike {
+	arrayBuffer(): Promise<ArrayBuffer>;
+}
+
+/** Normalise {@link BinaryInput} to a `Uint8Array` view (no copy). */
+export function toUint8Array(input: BinaryInput): Uint8Array {
+	if (input instanceof Uint8Array) {
+		return input;
+	}
+	if (ArrayBuffer.isView(input)) {
+		return new Uint8Array(input.buffer, input.byteOffset, input.byteLength);
+	}
+	return new Uint8Array(input);
+}
+
 /**
  * Parse the metadata of an EOT container.
  *
@@ -344,10 +365,11 @@ const VERSION_MAGIC: Record<number, EotVersion> = {
  * layout. On a corrected version {@link EotMetadata.badVersion} is set rather
  * than throwing (libeot returns the recoverable `EOT_WARN_BAD_VERSION`).
  *
- * @param bytes Raw `.eot` file bytes.
+ * @param input Raw `.eot` file bytes (`Uint8Array`, `ArrayBuffer` or any typed-array view).
  * @throws {EotError} on a corrupt or truncated container.
  */
-export function parseEotMetadata(bytes: Uint8Array): EotMetadata {
+export function parseEotMetadata(input: BinaryInput): EotMetadata {
+	const bytes = toUint8Array(input);
 	if (bytes.length < 8) {
 		throw new EotError(EotErrorCode.InsufficientBytes, 'EOT file too small (need at least 8 bytes)');
 	}
@@ -356,6 +378,9 @@ export function parseEotMetadata(bytes: Uint8Array): EotMetadata {
 	const fontDataSize = readU32LE(bytes, 4);
 	// EOTgetMetadataLength = totalSize - fontDataSize; the file must be at least
 	// that long to contain the full header.
+	if (fontDataSize > totalSize) {
+		throw new EotError(EotErrorCode.CorruptFile, 'EOT font data size exceeds declared total size');
+	}
 	const metadataLength = totalSize - fontDataSize;
 	if (bytes.length < metadataLength) {
 		throw new EotError(
@@ -394,6 +419,7 @@ export function parseEotMetadata(bytes: Uint8Array): EotMetadata {
 				...body,
 				compressed: (flags & TTEMBED_TTCOMPRESSED) !== 0,
 				encrypted: (flags & TTEMBED_XORENCRYPTDATA) !== 0,
+				subset: (flags & TTEMBED_SUBSET) !== 0,
 				badVersion: tryVersion !== codedVersion,
 			};
 		} catch (err) {
@@ -431,17 +457,23 @@ export function parseEotMetadata(bytes: Uint8Array): EotMetadata {
  * protection mechanism; this cannot determine whether an outer file or
  * document containing the EOT is password-protected.
  *
- * @param bytes Raw `.eot` file bytes.
+ * @param input Raw `.eot` file bytes (`Uint8Array`, `ArrayBuffer` or any typed-array view).
  * @throws {EotError} on a corrupt or truncated container.
  */
-export function inspectEotProtection(bytes: Uint8Array): EotProtection {
-	const metadata = parseEotMetadata(bytes);
+export function inspectEotProtection(input: BinaryInput): EotProtection {
+	const metadata = parseEotMetadata(input);
 	return {
 		encryption: metadata.encrypted ? 'xor-0x50' : 'none',
 		passwordProtection: 'not_supported_by_eot',
 		embeddingPermissions: metadata.permissions,
 		rootString: metadata.rootString,
 	};
+}
+
+/** Options for {@link eotToTtf}. */
+export interface EotToTtfOptions {
+	onWarn?: (message: string) => void;
+	maxOutputBytes?: number;
 }
 
 /**
@@ -452,16 +484,18 @@ export function inspectEotProtection(bytes: Uint8Array): EotProtection {
  * compressed/encrypted flags. This is the drop-in equivalent of libeot's
  * `EOT2ttf_*` entry points.
  *
- * @param bytes Raw `.eot` file bytes.
+ * @param input Raw `.eot` file bytes (`Uint8Array`, `ArrayBuffer` or any typed-array view).
  * @returns The reconstructed TrueType font.
+ * @param options.maxOutputBytes Cap on the reconstructed font size (default 128 MiB).
  * @param options.onWarn Called for recovered header-version mismatches and
  * non-fatal decompression diagnostics.
  * @throws {EotError} on a corrupt container or during decompression.
  */
 export function eotToTtf(
-	bytes: Uint8Array,
-	options?: { onWarn?: (message: string) => void },
+	input: BinaryInput,
+	options?: EotToTtfOptions,
 ): Uint8Array {
+	const bytes = toUint8Array(input);
 	const meta = parseEotMetadata(bytes);
 	if (meta.badVersion) {
 		options?.onWarn?.(`EOT header version disagrees with its layout; decoded as version ${meta.version}`);
@@ -471,6 +505,7 @@ export function eotToTtf(
 		compressed: meta.compressed,
 		encrypted: meta.encrypted,
 		onWarn: options?.onWarn,
+		maxOutputBytes: options?.maxOutputBytes,
 	});
 }
 
@@ -483,4 +518,17 @@ export function eotToTtf(
  */
 export function canLegallyEdit(metadata: EotMetadata): boolean {
 	return metadata.permissions === 0 || (metadata.permissions & EDITING_MASK) !== 0;
+}
+
+/**
+ * Promise-returning variant of {@link eotToTtf} that also accepts a `Blob`/`File`
+ * (convenient in browsers). Decoding itself still runs synchronously once the
+ * bytes are available.
+ */
+export async function eotToTtfAsync(
+	input: BinaryInput | BlobLike,
+	options?: EotToTtfOptions,
+): Promise<Uint8Array> {
+	const data = 'arrayBuffer' in input && typeof input.arrayBuffer === 'function' ? await input.arrayBuffer() : input;
+	return eotToTtf(data as BinaryInput, options);
 }

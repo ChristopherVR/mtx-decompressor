@@ -10,7 +10,7 @@ import { parseCTF } from './ctf-parser';
 import { lzcompDecompress } from './lzcomp';
 import { dumpContainer } from './sfnt-builder';
 import { Stream } from './stream';
-import { EotError, EotErrorCode } from './errors';
+import { EotError, EotErrorCode, toEotError } from './errors';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -35,8 +35,9 @@ const ENCRYPTION_KEY = 0x50;
  * The data following the header is split into three contiguous
  * compressed blocks whose boundaries are determined by the offsets.
  *
- * @param data  Raw MTX data (BSGP header must already be stripped and
- *              offsets adjusted before calling this function).
+ * @param data  Raw MTX data, i.e. the font-data region of the EOT container.
+ *              Real-world EOT files (Glyphicons, Font Awesome) decode as-is;
+ *              no BSGP stripping is needed.
  * @param size  Total byte length of `data`.
  * @returns An object containing the three decompressed byte arrays and
  *          their respective sizes.
@@ -107,6 +108,22 @@ export function unpackMtx(
 // Main decompression entry point
 // ---------------------------------------------------------------------------
 
+/** Default ceiling on the size of a reconstructed font (128 MiB). */
+export const DEFAULT_MAX_OUTPUT_BYTES = 128 * 1024 * 1024;
+
+/** Options accepted by {@link decompressMtx}. */
+export interface DecompressOptions {
+	encrypted?: boolean;
+	compressed?: boolean;
+	onWarn?: (message: string) => void;
+	/**
+	 * Upper bound on the reconstructed font size in bytes, guarding against
+	 * decompression bombs. Defaults to {@link DEFAULT_MAX_OUTPUT_BYTES}; pass
+	 * `Infinity` to disable.
+	 */
+	maxOutputBytes?: number;
+}
+
 /**
  * Decompress an MTX-compressed font (e.g. from an EOT wrapper) into a
  * standard TrueType font binary.
@@ -115,13 +132,25 @@ export function unpackMtx(
  * @param options.encrypted   If `true`, XOR-decrypt with {@link ENCRYPTION_KEY}.
  * @param options.compressed  If `false`, skip decompression and return the
  *                            (possibly decrypted) data as-is.
+ * @param options.maxOutputBytes  Cap on the reconstructed font size.
  * @param options.onWarn      Optional hook invoked with a message for each
  *                            non-fatal diagnostic. The font is still produced.
  * @returns A `Uint8Array` containing a valid TrueType (.ttf) font.
  */
 export function decompressMtx(
 	fontData: Uint8Array,
-	options?: { encrypted?: boolean; compressed?: boolean; onWarn?: (message: string) => void },
+	options?: DecompressOptions,
+): Uint8Array {
+	try {
+		return decompressMtxUnchecked(fontData, options);
+	} catch (err) {
+		throw toEotError(err);
+	}
+}
+
+function decompressMtxUnchecked(
+	fontData: Uint8Array,
+	options?: DecompressOptions,
 ): Uint8Array {
 	const encrypted = options?.encrypted ?? false;
 	const compressed = options?.compressed ?? true;
@@ -142,6 +171,11 @@ export function decompressMtx(
 
 	// --- Early exit when not compressed ------------------------------------
 	if (!compressed) {
+		const tag = data.length >= 4 ? ((data[0] << 24) | (data[1] << 16) | (data[2] << 8) | data[3]) >>> 0 : 0;
+		// 0x00010000, 'OTTO', 'true', 'ttcf'
+		if (tag !== 0x00010000 && tag !== 0x4f54544f && tag !== 0x74727565 && tag !== 0x74746366) {
+			options?.onWarn?.('uncompressed font data does not start with a recognised sfnt signature');
+		}
 		// Return an owned buffer, matching libeot (writeFontFile.c always copies).
 		// The encrypted branch already allocated a fresh array; the aliased
 		// branch must be copied so we never return the caller's own buffer.
@@ -149,7 +183,11 @@ export function decompressMtx(
 	}
 
 	// --- Unpack 3 LZCOMP streams ------------------------------------------
-	const { streams } = unpackMtx(data, data.length);
+	const { streams, sizes } = unpackMtx(data, data.length);
+	const maxOutputBytes = options?.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
+	if (sizes.reduce((a, b) => a + b, 0) > maxOutputBytes) {
+		throw new EotError(EotErrorCode.MtxError, `decompressed streams exceed maxOutputBytes (${maxOutputBytes})`);
+	}
 
 	// --- Wrap each decompressed buffer in a Stream -------------------------
 	const streamObjects = streams.map((buf) => new Stream(buf, buf.length));
@@ -158,7 +196,7 @@ export function decompressMtx(
 	const container = parseCTF(streamObjects, { onWarn: options?.onWarn });
 
 	// --- Assemble final TrueType font -------------------------------------
-	return dumpContainer(container);
+	return dumpContainer(container, { maxOutputBytes });
 }
 
 // ---------------------------------------------------------------------------

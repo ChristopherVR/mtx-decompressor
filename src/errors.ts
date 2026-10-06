@@ -40,8 +40,8 @@ const WARNING_CODES = new Set<EotErrorCode>([EotErrorCode.WarnBadVersion]);
 export class EotError extends Error {
 	readonly code: EotErrorCode;
 
-	constructor(code: EotErrorCode, message: string) {
-		super(message);
+	constructor(code: EotErrorCode, message: string, options?: { cause?: unknown }) {
+		super(message, options);
 		this.name = 'EotError';
 		this.code = code;
 		// Preserve the prototype chain when targeting ES5-ish transpiles.
@@ -52,4 +52,13 @@ export class EotError extends Error {
 	get isWarning(): boolean {
 		return WARNING_CODES.has(this.code);
 	}
+}
+
+/** Rethrow anything that is not an {@link EotError} as a `CorruptFile` EotError, keeping the cause. */
+export function toEotError(err: unknown): EotError {
+	if (err instanceof EotError) {
+		return err;
+	}
+	const detail = err instanceof Error ? err.message : String(err);
+	return new EotError(EotErrorCode.CorruptFile, `malformed font data: ${detail}`, { cause: err });
 }

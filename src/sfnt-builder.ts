@@ -167,9 +167,16 @@ function getRequiredSize(ctr: SFNTContainer): number {
  *     `checksumAdjustment` field.
  *  7. Return the assembled bytes.
  */
-export function dumpContainer(ctr: SFNTContainer): Uint8Array {
+export function dumpContainer(ctr: SFNTContainer, options?: { maxOutputBytes?: number }): Uint8Array {
 	validateTables(ctr);
 	const requiredSize = getRequiredSize(ctr);
+	const maxOutputBytes = options?.maxOutputBytes;
+	if (maxOutputBytes !== undefined && requiredSize > maxOutputBytes) {
+		throw new EotError(
+			EotErrorCode.MtxError,
+			`reconstructed font (${requiredSize} bytes) exceeds maxOutputBytes (${maxOutputBytes})`,
+		);
+	}
 	const out = new Stream(new Uint8Array(requiredSize), 0);
 
 	// --- 1. Offset table ---------------------------------------------------
