@@ -42,6 +42,11 @@ export class BitIO {
 	 *     shifted out of the original byte value).
 	 */
 	inputBit(): boolean {
+		return this.nextBit() !== 0;
+	}
+
+	/** Same as {@link inputBit} but returns 0 | 1 (hot-path variant). */
+	nextBit(): number {
 		if (this.bitCount === 0) {
 			// Reload before consuming any bit, and throw *before* mutating any
 			// state so a caught end-of-data error leaves the reader consistent
@@ -54,7 +59,7 @@ export class BitIO {
 		}
 		this.bitCount--;
 		this.bitBuffer <<= 1;
-		return (this.bitBuffer & 0x100) !== 0;
+		return (this.bitBuffer >> 8) & 1;
 	}
 
 	/**

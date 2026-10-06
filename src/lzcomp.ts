@@ -141,7 +141,7 @@ function initializeModel(window: Uint8Array): void {
  *                          ranges for the subsequent distance decode.
  * @returns The decoded match length (>= LEN_MIN).
  */
-function decodeLength(lenEcoder: AHuff, symbol: number, numDistRangesOut: number[]): number {
+function decodeLength(lenEcoder: AHuff, symbol: number): number {
 	const mask = 1 << BIT_RANGE; // 4  — the continuation / stop bit
 	let firstTime = true;
 	let value = 0;
@@ -160,9 +160,9 @@ function decodeLength(lenEcoder: AHuff, symbol: number, numDistRangesOut: number
 			bits = symbol - 256;
 			firstTime = false;
 
-			// The high part of the first chunk encodes which distance range to use.
-			numDistRangesOut[0] = Math.floor(bits / (1 << LEN_WIDTH)) + 1;
-			bits %= 1 << LEN_WIDTH;
+			// The high part of the first chunk encodes the distance-range count
+			// (derived at the call site); keep only the low part here.
+			bits &= (1 << LEN_WIDTH) - 1;
 		} else {
 			bits = lenEcoder.readSymbol();
 		}
@@ -273,7 +273,7 @@ export function lzcompDecompress(data: Uint8Array, size: number, version: number
 		if (!usingRunLength) {
 			// Fast path: no RLE, just append.
 			if (outIdx >= outBufSize) {
-				outBufSize += outBufSize >>> 1;
+				outBufSize += (outBufSize >>> 1) + 16;
 				if (outBufSize > MAX_OUT) {
 					throw new EotError(EotErrorCode.MtxError, 'LZCOMP output exceeds maximum size budget');
 				}
@@ -298,7 +298,7 @@ export function lzcompDecompress(data: Uint8Array, size: number, version: number
 					rleState = RLE_SEEN_ESCAPE;
 				} else {
 					if (outIdx >= outBufSize) {
-						outBufSize += outBufSize >>> 1;
+						outBufSize += (outBufSize >>> 1) + 16;
 						if (outBufSize > MAX_OUT) {
 							throw new EotError(EotErrorCode.MtxError, 'LZCOMP output exceeds maximum size budget');
 						}
@@ -315,7 +315,7 @@ export function lzcompDecompress(data: Uint8Array, size: number, version: number
 				if (rleCount === 0) {
 					// Escaped escape: emit the escape byte itself.
 					if (outIdx >= outBufSize) {
-						outBufSize += outBufSize >>> 1;
+						outBufSize += (outBufSize >>> 1) + 16;
 						if (outBufSize > MAX_OUT) {
 							throw new EotError(EotErrorCode.MtxError, 'LZCOMP output exceeds maximum size budget');
 						}
@@ -350,7 +350,46 @@ export function lzcompDecompress(data: Uint8Array, size: number, version: number
 		}
 	};
 
-	// --- Main decode loop --------------------------------------------------
+	// --- Fast path: no run-length decoding ---------------------------------
+	// The window already holds the output byte-for-byte, so decode straight
+	// into it and copy the result out once.
+	if (!usingRunLength) {
+		let p = 0;
+		while (p < outLen) {
+			const symbol = symEcoder.readSymbol();
+			if (symbol < 256) {
+				win[base + p++] = symbol;
+			} else if (symbol === DUP2) {
+				win[base + p] = win[base + p - 2];
+				p++;
+			} else if (symbol === DUP4) {
+				win[base + p] = win[base + p - 4];
+				p++;
+			} else if (symbol === DUP6) {
+				win[base + p] = win[base + p - 6];
+				p++;
+			} else {
+				let length = decodeLength(lenEcoder, symbol);
+				const distance = decodeDistance(distEcoder, ((symbol - 256) >>> LEN_WIDTH) + 1);
+				if (distance >= MAX_2BYTE_DIST) {
+					length++;
+				}
+				if (!(length >= 0) || length > outLen - p) {
+					throw new EotError(EotErrorCode.MtxError, 'LZCOMP match length exceeds declared output size');
+				}
+				// Byte-by-byte on purpose: overlapping copies must replicate.
+				let src = base + p - distance - length + 1;
+				let dst = base + p;
+				for (const end = dst + length; dst < end; ) {
+					win[dst++] = win[src++];
+				}
+				p += length;
+			}
+		}
+		return win.slice(base, base + outLen);
+	}
+
+	// --- Main decode loop (run-length path) --------------------------------
 	// `pos` is hoisted so the post-loop bounds check can inspect its final
 	// value: the copy branch advances `pos` without re-testing the loop
 	// condition, so a corrupt stream can drive it past `outLen`.
@@ -374,15 +413,17 @@ export function lzcompDecompress(data: Uint8Array, size: number, version: number
 			value = win[base + pos - 6];
 		} else {
 			// ---- Copy item (back-reference) ----
-			const numDistRangesRef = [0];
-			let length = decodeLength(lenEcoder, symbol, numDistRangesRef);
-			const distance = decodeDistance(distEcoder, numDistRangesRef[0]);
+			let length = decodeLength(lenEcoder, symbol);
+			const distance = decodeDistance(distEcoder, ((symbol - 256) >>> LEN_WIDTH) + 1);
 
 			// Long distances add one extra byte to the match length.
 			if (distance >= MAX_2BYTE_DIST) {
 				length++;
 			}
 
+			if (!(length >= 0) || length > outLen - pos) {
+				throw new EotError(EotErrorCode.MtxError, 'LZCOMP match length exceeds declared output size');
+			}
 			const start = base + pos - distance - length + 1;
 			for (let j = 0; j < length; j++) {
 				value = win[start + j];
