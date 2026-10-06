@@ -80,7 +80,7 @@ bombs. In browsers, `eotToTtfAsync(blobOrFile)` accepts a `Blob`/`File` directly
 
 Any failure surfaces as an `EotError` (with the original error as `cause` when the
 failure was unexpected). The library uses no Node-only APIs (enforced by a test) and
-is exercised on Node 20, 22 and 24 in CI.
+is exercised on the current Node LTS in CI.
 
 ### `inspectEotProtection(eotBytes)`
 

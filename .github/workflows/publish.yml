@@ -31,16 +31,16 @@ jobs:
     runs-on: ubuntu-latest
     environment: npm
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+      - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version: lts/*
           registry-url: https://registry.npmjs.org
 
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: oven-sh/setup-bun@v2
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -72,7 +72,7 @@ jobs:
 
       - name: Generate changelog
         if: steps.check.outputs.publish == 'true'
-        uses: orhun/git-cliff-action@a9a95522b26fe6403f7bb24031f21fb573d0f5ff # v4
+        uses: orhun/git-cliff-action@v4
         with:
           config: cliff.toml
           args: --tag ${{ steps.v.outputs.tag }} --output CHANGELOG.md
@@ -99,12 +99,12 @@ jobs:
       - name: Publish to npm
         if: steps.check.outputs.publish == 'true'
         run: |
-          npm install -g npm@11  # trusted publishing needs npm >= 11.5.1; pin the major
+          npm install -g npm@latest
           npm publish --provenance --access public
 
       - name: Create GitHub release
         if: steps.check.outputs.publish == 'true'
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.v.outputs.tag }}
           target_commitish: main
