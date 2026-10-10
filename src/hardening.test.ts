@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { EotError, EotErrorCode, toEotError } from './errors';
 import { parseEotMetadata } from './eot';
-import { decompressMtx } from './mtx-decompress';
+import { decompressMtx, unpackMtx } from './mtx-decompress';
+import { lzcompDecompress, OUTPUT_BUDGET_EXCEEDED } from './lzcomp';
 import { Stream } from './stream';
 
 describe('hardening', () => {
@@ -46,6 +47,23 @@ describe('maxOutputBytes', () => {
 		const eot = new Uint8Array(readFileSync(join(__dirname, '__fixtures__', 'real', 'glyphicons-3.3.7.eot')));
 		expect(() => eotToTtf(eot, { maxOutputBytes: 1000 })).toThrow(/maxOutputBytes/);
 		expect(eotToTtf(eot, { maxOutputBytes: 1_000_000 }).length).toBeGreaterThan(1000);
+	});
+
+	it('rejects an oversized declared LZCOMP length before allocating for it', () => {
+		// Version 1 has no RLE flag bit, so the first 24 bits are the output length.
+		const declared = new Uint8Array([0x10, 0x00, 0x00, 0, 0, 0, 0, 0]); // 1 MiB
+		expect(() => lzcompDecompress(declared, declared.length, 1, 1024)).toThrow(OUTPUT_BUDGET_EXCEEDED);
+	});
+
+	it('enforces the budget across the three MTX streams during unpacking', async () => {
+		const { readFileSync } = await import('node:fs');
+		const { join } = await import('node:path');
+		const eot = new Uint8Array(readFileSync(join(__dirname, '__fixtures__', 'real', 'glyphicons-3.3.7.eot')));
+		const meta = parseEotMetadata(eot);
+		const mtx = eot.subarray(meta.fontDataOffset, meta.fontDataOffset + meta.fontDataSize);
+		const total = unpackMtx(mtx, mtx.length).sizes.reduce((a, b) => a + b, 0);
+		expect(unpackMtx(mtx, mtx.length, total).sizes.reduce((a, b) => a + b, 0)).toBe(total);
+		expect(() => unpackMtx(mtx, mtx.length, total - 1)).toThrow(OUTPUT_BUDGET_EXCEEDED);
 	});
 });
 

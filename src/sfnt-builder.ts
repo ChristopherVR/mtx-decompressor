@@ -89,32 +89,32 @@ function writeTableDirectory(ctr: SFNTContainer, out: Stream): void {
 function writeTableCheckingSum(table: SFNTTable, out: Stream): void {
 	table.offset = out.pos;
 
-	let checksum = 0;
 	const data = table.buf;
 	const len = table.bufSize;
-	const fullWords = Math.floor(len / 4);
-	const remainder = len % 4;
+	const padded = (len + 3) & ~3;
 
-	for (let i = 0; i < fullWords; i++) {
-		const off = i * 4;
-		// The head checksum is defined with checksumAdjustment treated as zero.
-		const isAdjustmentWord = table.tag === 'head' && off === 8;
-		const word = isAdjustmentWord ? 0 :
-			((data[off] << 24) | (data[off + 1] << 16) | (data[off + 2] << 8) | data[off + 3]) >>> 0;
-		checksum = (checksum + word) >>> 0;
-		out.writeU32(word);
+	// Bulk-copy the table, zero its padding, then checksum the copy in place
+	// (the output buffer is pre-sized by getRequiredSize, so no growth checks
+	// are needed per word).
+	const buf = out.buf;
+	const start = out.pos;
+	buf.set(data.subarray(0, len), start);
+	buf.fill(0, start + len, start + padded);
+	// The head checksum is defined with checksumAdjustment treated as zero.
+	if (table.tag === 'head') {
+		buf.fill(0, start + 8, start + 12);
 	}
 
-	if (remainder > 0) {
-		let word = 0;
-		for (let j = 0; j < remainder; j++) {
-			word |= data[fullWords * 4 + j] << (24 - j * 8);
-		}
-		word >>>= 0;
+	let checksum = 0;
+	for (let off = start, end = start + padded; off < end; off += 4) {
+		const word = ((buf[off] << 24) | (buf[off + 1] << 16) | (buf[off + 2] << 8) | buf[off + 3]) >>> 0;
 		checksum = (checksum + word) >>> 0;
-		out.writeU32(word);
 	}
 
+	out.pos = start + padded;
+	if (out.pos > out.size) {
+		out.size = out.pos;
+	}
 	table.checksum = checksum;
 }
 

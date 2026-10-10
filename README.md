@@ -76,7 +76,7 @@ such as `WarnBadVersion`, `WarnNotSfnt`, `WarnMaxpVersion` or `WarnMissingTable`
 
 Input may be a `Uint8Array`, `ArrayBuffer` or any typed-array view. `options.maxOutputBytes`
 (default 128 MiB) caps the reconstructed font size to guard against decompression
-bombs. In browsers, `eotToTtfAsync(blobOrFile)` accepts a `Blob`/`File` directly.
+bombs; it also bounds the intermediate LZCOMP streams as they are decoded. In browsers, `eotToTtfAsync(blobOrFile)` accepts a `Blob`/`File` directly.
 
 Any failure surfaces as an `EotError` (with the original error as `cause` when the
 failure was unexpected). The library uses no Node-only APIs (enforced by a test) and
@@ -127,9 +127,10 @@ Decompress an MTX-compressed font into a TrueType binary.
 
 Convenience wrapper around `decompressMtx` taking explicit boolean parameters; returns a TrueType binary.
 
-### `unpackMtx(data, size)`
+### `unpackMtx(data, size, maxOutputBytes?)`
 
 Low-level: unpack an MTX blob into three LZCOMP-decompressed streams. Returns `{ streams: Uint8Array[], sizes: number[] }`.
+The optional `maxOutputBytes` caps the combined size of the three streams; it is enforced while decoding, before oversized buffers are allocated.
 
 The exported `SFNTContainer` and `SFNTTable` types describe the reconstructed font tables. `EotError` / `EotErrorCode` provide machine-discriminable error handling.
 

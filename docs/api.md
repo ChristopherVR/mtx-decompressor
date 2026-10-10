@@ -36,9 +36,9 @@ Decompresses an MTX-compressed font into a TrueType binary.
 
 Wrapper around `decompressMtx` that takes explicit boolean parameters.
 
-## `unpackMtx(data, size)`
+## `unpackMtx(data, size, maxOutputBytes?)`
 
-Low level: unpacks an MTX blob into three LZCOMP-decompressed streams. Returns `{ streams: Uint8Array[], sizes: number[] }`.
+Low level: unpacks an MTX blob into three LZCOMP-decompressed streams. Returns `{ streams: Uint8Array[], sizes: number[] }`. The optional `maxOutputBytes` caps the combined size of the three streams; it is enforced while decoding, before oversized buffers are allocated.
 
 ## Types and errors
 

@@ -11,11 +11,13 @@ import { EotError, EotErrorCode } from './errors';
  * automatically.
  */
 export class BitIO {
-	private data: Uint8Array;
-	private index: number;
-	private size: number;
-	private bitBuffer: number = 0;
-	private bitCount: number = 0;
+	// Fields are package-internal (not `private`) so the adaptive Huffman
+	// decoder can inline bit reads in its hot loop; see `AHuff.readSymbol`.
+	/** @internal */ data: Uint8Array;
+	/** @internal */ index: number;
+	/** @internal */ size: number;
+	/** @internal Current byte being consumed. */ bitBuffer: number = 0;
+	/** @internal Bits of `bitBuffer` not yet consumed (0..8). */ bitCount: number = 0;
 
 	/**
 	 * @param data   Source byte buffer.
@@ -57,9 +59,7 @@ export class BitIO {
 			this.bitBuffer = this.data[this.index++];
 			this.bitCount = 8;
 		}
-		this.bitCount--;
-		this.bitBuffer <<= 1;
-		return (this.bitBuffer >> 8) & 1;
+		return (this.bitBuffer >> --this.bitCount) & 1;
 	}
 
 	/**
@@ -71,10 +71,7 @@ export class BitIO {
 	readValue(numberOfBits: number): number {
 		let value = 0;
 		for (let i = numberOfBits - 1; i >= 0; i--) {
-			value <<= 1;
-			if (this.inputBit()) {
-				value |= 1;
-			}
+			value = (value << 1) | this.nextBit();
 		}
 		// Normalize to unsigned: a 32-bit-wide read whose top bit is set would
 		// otherwise surface as a negative number (JS `<<` is signed). libeot's

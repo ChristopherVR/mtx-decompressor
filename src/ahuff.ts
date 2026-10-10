@@ -14,6 +14,7 @@
  * then optionally pre-biased depending on the symbol range.
  */
 import { BitIO } from './bitio';
+import { EotError, EotErrorCode } from './errors';
 
 /**
  * Return the number of bits required to represent the non-negative integer `x`.
@@ -35,12 +36,15 @@ export class AHuff {
 	private range: number;
 	// Tree stored as parallel typed arrays (1-indexed, index 0 unused):
 	//   up     parent index (position-specific, never swapped)
-	//   left / right  child indices (-1 for leaves)
+	//   child  child indices, interleaved: child[2a] is the left (bit 0) and
+	//          child[2a + 1] the right (bit 1) child of node a; -1 for leaves.
+	//          Interleaving lets readSymbol index by the decoded bit instead of
+	//          branching on it — compressed bits are close to random, so a
+	//          `bit ? right : left` branch mispredicts about half the time.
 	//   code   symbol for leaves (>= 0), -1 for internal nodes
 	//   weight cumulative weight maintaining the sibling property
 	private up: Int32Array;
-	private left: Int32Array;
-	private right: Int32Array;
+	private child: Int32Array;
 	private code: Int32Array;
 	private weight: Int32Array;
 	/** Maps symbol value -> current tree index of its leaf node. */
@@ -72,8 +76,7 @@ export class AHuff {
 
 		// Allocate the tree (index 0 is an unused sentinel) ------------------
 		const up = (this.up = new Int32Array(treeSize));
-		const left = (this.left = new Int32Array(treeSize));
-		const right = (this.right = new Int32Array(treeSize));
+		const child = (this.child = new Int32Array(2 * treeSize));
 		const code = (this.code = new Int32Array(treeSize).fill(-1));
 		this.weight = new Int32Array(treeSize);
 
@@ -86,8 +89,8 @@ export class AHuff {
 
 		// Internal nodes (1 .. range-1): set children, code = -1
 		for (let i = 1; i < range; i++) {
-			left[i] = 2 * i;
-			right[i] = 2 * i + 1;
+			child[2 * i] = 2 * i;
+			child[2 * i + 1] = 2 * i + 1;
 		}
 
 		// Leaf nodes (range .. 2*range-1): code = symbol index. The C code sets
@@ -96,8 +99,8 @@ export class AHuff {
 		for (let i = 0; i < range; i++) {
 			const leafIdx = range + i;
 			code[leafIdx] = i;
-			left[leafIdx] = -1;
-			right[leafIdx] = -1;
+			child[2 * leafIdx] = -1;
+			child[2 * leafIdx + 1] = -1;
 			this.symbolIndex[i] = leafIdx;
 		}
 
@@ -147,16 +150,38 @@ export class AHuff {
 	readSymbol(): number {
 		const bio = this.bio;
 		const code = this.code;
-		const left = this.left;
-		const right = this.right;
+		const child = this.child;
 		let a = AHuff.ROOT;
 		let symbol: number;
 
+		// Bit reads are inlined (equivalent to `bio.nextBit()`) with the reader
+		// state held in locals and written back once: this loop dominates
+		// decompression time.
+		const data = bio.data;
+		const size = bio.size;
+		let index = bio.index;
+		let byte = bio.bitBuffer;
+		let count = bio.bitCount;
+
 		// Traverse tree from ROOT to leaf (matches C do-while)
 		do {
-			a = bio.nextBit() ? right[a] : left[a];
+			if (count === 0) {
+				if (index >= size) {
+					bio.index = index;
+					bio.bitBuffer = byte;
+					bio.bitCount = 0;
+					throw new EotError(EotErrorCode.InsufficientBytes, 'BitIO: end of data');
+				}
+				byte = data[index++];
+				count = 8;
+			}
+			a = child[(a << 1) | ((byte >> --count) & 1)];
 			symbol = code[a];
 		} while (symbol < 0);
+
+		bio.index = index;
+		bio.bitBuffer = byte;
+		bio.bitCount = count;
 
 		// Update adaptive weights for the decoded leaf
 		this.updateWeight(a);
@@ -205,20 +230,22 @@ export class AHuff {
 	}
 
 	/**
-	 * Swap the content (left, right, code, weight) of two nodes. The `up`
+	 * Swap the content (children, code, weight) of two nodes. The `up`
 	 * pointer stays with the position, so afterwards the children of each
 	 * swapped internal node get their parent pointer fixed, and leaves get
 	 * their `symbolIndex` entry updated.
 	 */
 	private swapNodes(a: number, b: number): void {
-		const { left, right, code, weight, up } = this;
+		const { child, code, weight, up } = this;
+		const a2 = a << 1;
+		const b2 = b << 1;
 
-		let t = left[a];
-		left[a] = left[b];
-		left[b] = t;
-		t = right[a];
-		right[a] = right[b];
-		right[b] = t;
+		let t = child[a2];
+		child[a2] = child[b2];
+		child[b2] = t;
+		t = child[a2 + 1];
+		child[a2 + 1] = child[b2 + 1];
+		child[b2 + 1] = t;
 		t = code[a];
 		code[a] = code[b];
 		code[b] = t;
@@ -228,16 +255,16 @@ export class AHuff {
 
 		let c = code[a];
 		if (c < 0) {
-			up[left[a]] = a;
-			up[right[a]] = a;
+			up[child[a2]] = a;
+			up[child[a2 + 1]] = a;
 		} else {
 			this.symbolIndex[c] = a;
 		}
 
 		c = code[b];
 		if (c < 0) {
-			up[left[b]] = b;
-			up[right[b]] = b;
+			up[child[b2]] = b;
+			up[child[b2 + 1]] = b;
 		} else {
 			this.symbolIndex[c] = b;
 		}
@@ -254,6 +281,6 @@ export class AHuff {
 			// Leaf — weight is already 1
 			return this.weight[a];
 		}
-		return (this.weight[a] = this.initWeight(this.left[a]) + this.initWeight(this.right[a]));
+		return (this.weight[a] = this.initWeight(this.child[2 * a]) + this.initWeight(this.child[2 * a + 1]));
 	}
 }

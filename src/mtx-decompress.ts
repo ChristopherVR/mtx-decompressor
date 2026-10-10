@@ -7,7 +7,7 @@
  */
 
 import { parseCTF } from './ctf-parser';
-import { lzcompDecompress } from './lzcomp';
+import { lzcompDecompress, OUTPUT_BUDGET_EXCEEDED } from './lzcomp';
 import { dumpContainer } from './sfnt-builder';
 import { Stream } from './stream';
 import { EotError, EotErrorCode, emitWarning, toEotError, type EotWarning } from './errors';
@@ -39,12 +39,16 @@ const ENCRYPTION_KEY = 0x50;
  *              Real-world EOT files (Glyphicons, Font Awesome) decode as-is;
  *              no BSGP stripping is needed.
  * @param size  Total byte length of `data`.
+ * @param maxOutputBytes  Optional combined budget for the three decompressed
+ *              streams. Each stream is decoded against what is left of it,
+ *              so an oversized stream fails before its buffers are allocated.
  * @returns An object containing the three decompressed byte arrays and
  *          their respective sizes.
  */
 export function unpackMtx(
 	data: Uint8Array,
 	size: number,
+	maxOutputBytes: number = Infinity,
 ): { streams: Uint8Array[]; sizes: number[] } {
 	// --- Validate buffer & header ------------------------------------------
 	if (data.length < 10) {
@@ -93,10 +97,12 @@ export function unpackMtx(
 	// Decompress each block
 	const streams: Uint8Array[] = [];
 	const decompressedSizes: number[] = [];
+	let budget = maxOutputBytes;
 
 	for (let i = 0; i < 3; i++) {
 		const block = data.subarray(offsets[i], offsets[i] + blockSizes[i]);
-		const decompressed = lzcompDecompress(block, blockSizes[i], versionMagic);
+		const decompressed = lzcompDecompress(block, blockSizes[i], versionMagic, budget);
+		budget -= decompressed.length;
 		streams.push(decompressed);
 		decompressedSizes.push(decompressed.length);
 	}
@@ -189,10 +195,15 @@ function decompressMtxUnchecked(
 	}
 
 	// --- Unpack 3 LZCOMP streams ------------------------------------------
-	const { streams, sizes } = unpackMtx(data, data.length);
 	const maxOutputBytes = options?.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
-	if (sizes.reduce((a, b) => a + b, 0) > maxOutputBytes) {
-		throw new EotError(EotErrorCode.MtxError, `decompressed streams exceed maxOutputBytes (${maxOutputBytes})`);
+	let streams: Uint8Array[];
+	try {
+		({ streams } = unpackMtx(data, data.length, maxOutputBytes));
+	} catch (err) {
+		if (err instanceof EotError && err.message.startsWith(OUTPUT_BUDGET_EXCEEDED)) {
+			throw new EotError(EotErrorCode.MtxError, `decompressed streams exceed maxOutputBytes (${maxOutputBytes})`);
+		}
+		throw err;
 	}
 
 	// --- Wrap each decompressed buffer in a Stream -------------------------
