@@ -35,6 +35,12 @@ export interface SFNTTable {
 export interface SFNTContainer {
 	tables: SFNTTable[];
 	/**
+	 * sfnt version written to the offset table: `0x00010000` (TrueType
+	 * outlines), `0x4f54544f` ('OTTO', CFF outlines) or `0x74727565` ('true').
+	 * Defaults to `0x00010000` when absent.
+	 */
+	scalarType?: number;
+	/**
 	 * Legacy diagnostic field. Supported metric tables are now reconstructed
 	 * rather than dropped, so this field is no longer populated.
 	 */
@@ -931,6 +937,23 @@ function parseMaxp(table: SFNTTable): MaxpData {
 // parseCTF — main entry point
 // ---------------------------------------------------------------------------
 
+const SFNT_TRUETYPE = 0x00010000;
+const SFNT_OTTO = 0x4f54544f;
+const SFNT_TRUE = 0x74727565;
+
+/**
+ * The sfnt version for the rebuilt font. It follows the outlines actually
+ * present rather than trusting the header alone: a font whose outlines are a
+ * CFF table must say 'OTTO', or strict rasterisers (Apple CoreText) reject
+ * it, and one with `glyf` outlines must not say 'OTTO'.
+ */
+function resolveScalarType(header: number, cffOutlines: boolean): number {
+	if (cffOutlines) {
+		return SFNT_OTTO;
+	}
+	return header === SFNT_TRUE ? SFNT_TRUE : SFNT_TRUETYPE;
+}
+
 /**
  * Parse a CTF (Compact TrueType Font) container from the three LZCOMP-
  * decompressed streams and produce an `SFNTContainer` that can be
@@ -946,7 +969,7 @@ export function parseCTF(streams: Stream[], options?: ParseCTFOptions): SFNTCont
 	const s0 = streams[0];
 
 	// --- Read SFNT offset (header) table -----------------------------------
-	const _scalarType = s0.readU32();
+	const headerScalarType = s0.readU32();
 	const numTables = s0.readU16();
 	const _searchRange = s0.readU16();
 	const _entrySelector = s0.readU16();
@@ -1064,7 +1087,11 @@ export function parseCTF(streams: Stream[], options?: ParseCTFOptions): SFNTCont
 		tables[maxpIdx].buf.byteOffset,
 		tables[maxpIdx].buf.byteLength,
 	).getUint32(0);
-	if (maxpVersion !== 0x00010000) {
+	// A CFF-flavoured OpenType font keeps its outlines in a raw `CFF `/`CFF2`
+	// table and legitimately carries maxp 0.5.
+	const hasCff = tables.some((t) => t.tag === 'CFF ' || t.tag === 'CFF2');
+	const cffOutlines = hasCff && glyfIdx < 0;
+	if (maxpVersion !== 0x00010000 && !cffOutlines) {
 		emitWarning(
 			options,
 			EotErrorCode.WarnMaxpVersion,
@@ -1127,5 +1154,5 @@ export function parseCTF(streams: Stream[], options?: ParseCTFOptions): SFNTCont
 		populateGlyfAndLoca(tables[glyfIdx], tables[locaIdx], headData, maxpData, streams);
 	}
 
-	return { tables };
+	return { tables, scalarType: resolveScalarType(headerScalarType, cffOutlines) };
 }

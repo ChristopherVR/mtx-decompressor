@@ -8,6 +8,8 @@ A zero-dependency TypeScript library that decompresses **MicroType Express (MTX)
 
 MTX is a font compression format developed by Monotype, used inside EOT containers commonly found in older web pages and embedded in Microsoft Office documents. This library parses the EOT container, extracts the compressed data, and reconstructs a standard `.ttf` file usable with standard font APIs (e.g. the `FontFace` API). It has no dependencies and works in both the browser and Node.js.
 
+A font whose outlines are a `CFF ` or `CFF2` table (a `.otf`) is rebuilt with the `OTTO` sfnt signature rather than the TrueType one, so strict rasterisers such as Apple's CoreText (Safari) accept it.
+
 <samp>**[▶️ Live demo](https://christophervr.github.io/mtx-decompressor/)** · **[📦 npm](https://www.npmjs.com/package/mtx-decompressor)**</samp>
 
 ---

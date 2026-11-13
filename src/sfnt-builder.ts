@@ -34,7 +34,7 @@ function maxPow2(n: number): number {
  * Write the 12-byte SFNT offset (header) table.
  *
  * Layout (all big-endian):
- *   scalarType   U32  — 0x00010000 for TrueType
+ *   scalarType   U32  — 0x00010000 for TrueType, 'OTTO' for CFF outlines
  *   numTables    U16
  *   searchRange  U16
  *   entrySelector U16
@@ -46,7 +46,7 @@ function writeOffsetTable(ctr: SFNTContainer, out: Stream): void {
 	const entrySelector = lgFloor(numTables);
 	const rangeShift = numTables * 16 - searchRange;
 
-	out.writeU32(0x00010000); // scalarType
+	out.writeU32(ctr.scalarType ?? 0x00010000); // scalarType
 	out.writeU16(numTables);
 	out.writeU16(searchRange);
 	out.writeU16(entrySelector);
