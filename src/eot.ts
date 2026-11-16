@@ -5,7 +5,7 @@
  * header that wraps MTX-compressed font data, derives where the font data
  * begins, and exposes the compression/encryption flags so callers no longer
  * have to guess them. `eotToTtf` chains this into {@link decompressMtx} to
- * turn a raw `.eot` file straight into a TrueType binary.
+ * turn a raw `.eot` file straight into a TrueType (or, for CFF outlines, OpenType) binary.
  *
  * Note: every field in the EOT header is LITTLE-endian, unlike the big-endian
  * CTF/SFNT streams handled elsewhere in this library.
@@ -496,7 +496,7 @@ export interface EotToTtfOptions {
 }
 
 /**
- * Decode a raw EOT container straight into a TrueType (.ttf) font binary.
+ * Decode a raw EOT container straight into a font binary: TrueType (.ttf), or OpenType/CFF (`OTTO`) when the outlines are CFF.
  *
  * Parses the header, locates and slices the embedded font data, and runs it
  * through {@link decompressMtx} using the container's own
@@ -504,7 +504,7 @@ export interface EotToTtfOptions {
  * `EOT2ttf_*` entry points.
  *
  * @param input Raw `.eot` file bytes (`Uint8Array`, `ArrayBuffer` or any typed-array view).
- * @returns The reconstructed TrueType font.
+ * @returns The reconstructed font (TrueType, or OpenType/CFF).
  * @param options.maxOutputBytes Cap on the reconstructed font size (default 128 MiB).
  * @param options.onWarn Called for recovered header-version mismatches and
  * non-fatal decompression diagnostics.

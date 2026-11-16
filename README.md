@@ -35,7 +35,7 @@ import { eotToTtf } from 'mtx-decompressor';
 
 const eotBytes: Uint8Array = /* the raw bytes of a .eot file */;
 const ttfBytes = eotToTtf(eotBytes);
-// => Uint8Array containing a valid TrueType font
+// => Uint8Array containing a valid sfnt font (TrueType, or OpenType/CFF)
 ```
 
 `eotToTtf` parses the EOT header, locates the embedded font data, and applies
@@ -67,7 +67,7 @@ apart.
 
 ### `eotToTtf(eotBytes, options?)`
 
-Parse a raw EOT container and return the reconstructed TrueType binary. Handles
+Parse a raw EOT container and return the reconstructed sfnt font binary (TrueType, or OpenType/CFF with an `OTTO` signature when the outlines are CFF). Handles
 header parsing, font-data extraction, and the container's compression/encryption
 flags. Throws `EotError` on a corrupt or truncated container.
 
@@ -113,7 +113,7 @@ permissions allow editing.
 
 ### `decompressMtx(fontData, options?)`
 
-Decompress an MTX-compressed font into a TrueType binary.
+Decompress an MTX-compressed font into an sfnt font binary (TrueType, or OpenType/CFF with an `OTTO` signature when the outlines are CFF).
 
 | Parameter            | Type                         | Description                                                                   |
 | -------------------- | ---------------------------- | ----------------------------------------------------------------------------- |
@@ -123,11 +123,11 @@ Decompress an MTX-compressed font into a TrueType binary.
 | `options.onWarn`     | `(message: string) => void`  | Optional hook called for each non-fatal diagnostic; the font is still produced |
 | `options.onWarning`  | `(w: EotWarning) => void`    | Same diagnostics with a machine-readable `code`                                |
 | `options.maxOutputBytes` | `number` (default 128 MiB) | Reject fonts that would reconstruct larger than this                         |
-| **Returns**          | `Uint8Array`                 | A valid TrueType (.ttf) font binary                                           |
+| **Returns**          | `Uint8Array`                 | A valid sfnt font binary (.ttf, or .otf for CFF)                                     |
 
 ### `decompressEotFont(fontData, compressed, encrypted)`
 
-Convenience wrapper around `decompressMtx` taking explicit boolean parameters; returns a TrueType binary.
+Convenience wrapper around `decompressMtx` taking explicit boolean parameters; returns an sfnt font binary (TrueType or OpenType/CFF).
 
 ### `unpackMtx(data, size, maxOutputBytes?)`
 

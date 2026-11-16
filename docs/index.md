@@ -39,7 +39,7 @@ Select or drop an `.eot` file. The font is extracted in your browser and is not 
 import { eotToTtf } from 'mtx-decompressor';
 
 const eotBytes = new Uint8Array(await file.arrayBuffer());
-const ttf = eotToTtf(eotBytes); // Uint8Array containing a TrueType font
+const ttf = eotToTtf(eotBytes); // Uint8Array containing a TrueType (or OpenType/CFF) font
 ```
 
 See [Getting started](./getting-started.md) for installation and [Usage](./usage.md) for more examples.

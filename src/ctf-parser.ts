@@ -562,6 +562,9 @@ function decodeSimpleGlyph(
 	// Copy raw hinting code from stream[2]
 	const codeSize = read255UShort(sGlyph);
 	if (codeSize > 0) {
+		// maxp limits are frequently understated in real fonts, so never rely on
+		// the per-glyph reservation made by the caller.
+		out.reserve(out.pos + codeSize);
 		streams[2].copyTo(out, codeSize);
 	}
 
@@ -664,6 +667,7 @@ function decodeCompositeGlyph(streams: Stream[], out: Stream): void {
 		} else {
 			argBytes = 2; // two S8 values packed into 2 bytes
 		}
+		out.reserve(out.pos + argBytes + 8);
 		sGlyph.copyTo(out, argBytes);
 
 		// Determine the number of transformation bytes
@@ -693,6 +697,7 @@ function decodeCompositeGlyph(streams: Stream[], out: Stream): void {
 		// Copy raw hinting code from stream[2]
 		const codeSize = read255UShort(sGlyph);
 		if (codeSize > 0) {
+			out.reserve(out.pos + codeSize);
 			streams[2].copyTo(out, codeSize);
 		}
 
@@ -857,7 +862,18 @@ interface HeadData {
  *
  * `indexToLocFormat` is at byte offset 50 within the `head` table.
  */
-function parseHead(table: SFNTTable): HeadData {
+function parseHead(table: SFNTTable, hasGlyf: boolean): HeadData {
+	// `indexToLocFormat` only matters when glyf/loca are rebuilt. A CFF-outline
+	// font has no loca, so a bad value there must not reject the font.
+	if (!hasGlyf) {
+		return { indexToLocFormat: 0, table };
+	}
+	if (table.bufSize < 54 || table.buf.length < 54) {
+		throw new EotError(
+			EotErrorCode.MalformedHeadTable,
+			`head table too small: ${table.bufSize} bytes (need 54)`,
+		);
+	}
 	const s = new Stream(table.buf, table.bufSize);
 	s.seekAbsolute(50);
 	const indexToLocFormat = s.readS16();
@@ -1078,7 +1094,7 @@ export function parseCTF(streams: Stream[], options?: ParseCTFOptions): SFNTCont
 	}
 
 	// --- Parse head and maxp for glyph decoding parameters -----------------
-	const headData: HeadData = parseHead(tables[headIdx]);
+	const headData: HeadData = parseHead(tables[headIdx], glyfIdx >= 0);
 	const maxpData: MaxpData = parseMaxp(tables[maxpIdx]);
 
 	// --- Non-fatal sanity warnings -----------------------------------------

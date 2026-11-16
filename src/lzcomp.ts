@@ -299,6 +299,9 @@ export function lzcompDecompress(
 				}
 				// Byte-by-byte on purpose: overlapping copies must replicate.
 				let src = base + p - distance - length + 1;
+				if (src < 0) {
+					throw new EotError(EotErrorCode.MtxError, 'LZCOMP match reaches before the start of the window');
+				}
 				let dst = base + p;
 				for (const end = dst + length; dst < end; ) {
 					win[dst++] = win[src++];
@@ -414,6 +417,9 @@ export function lzcompDecompress(
 				throw new EotError(EotErrorCode.MtxError, 'LZCOMP match length exceeds declared output size');
 			}
 			const start = base + pos - distance - length + 1;
+			if (start < 0) {
+				throw new EotError(EotErrorCode.MtxError, 'LZCOMP match reaches before the start of the window');
+			}
 			for (let j = 0; j < length; j++) {
 				value = win[start + j];
 				win[base + pos] = value;
@@ -437,6 +443,12 @@ export function lzcompDecompress(
 			EotErrorCode.MtxError,
 			`LZCOMP decode overran output: pos=${pos}, expected=${outLen}`,
 		);
+	}
+
+	// The RLE stream must end on a complete token; a dangling escape means the
+	// output was cut short.
+	if (rleState === RLE_SEEN_ESCAPE || rleState === RLE_NEED_BYTE) {
+		throw new EotError(EotErrorCode.MtxError, 'LZCOMP run-length data ends inside an escape sequence');
 	}
 
 	return outBuf.subarray(0, outIdx);

@@ -134,7 +134,7 @@ export interface DecompressOptions {
 
 /**
  * Decompress an MTX-compressed font (e.g. from an EOT wrapper) into a
- * standard TrueType font binary.
+ * standard sfnt font binary (TrueType, or OpenType/CFF).
  *
  * @param fontData    Raw font bytes (MTX-compressed, optionally encrypted).
  * @param options.encrypted   If `true`, XOR-decrypt with {@link ENCRYPTION_KEY}.
@@ -143,7 +143,7 @@ export interface DecompressOptions {
  * @param options.maxOutputBytes  Cap on the reconstructed font size.
  * @param options.onWarn      Optional hook invoked with a message for each
  *                            non-fatal diagnostic. The font is still produced.
- * @returns A `Uint8Array` containing a valid TrueType (.ttf) font.
+ * @returns A `Uint8Array` containing a valid sfnt font: TrueType, or OpenType/CFF (`OTTO`).
  */
 export function decompressMtx(
 	fontData: Uint8Array,
@@ -229,7 +229,7 @@ function decompressMtxUnchecked(
  * @param fontData    Raw font bytes extracted from the EOT container.
  * @param compressed  Whether the data is MTX-compressed.
  * @param encrypted   Whether the data is XOR-encrypted.
- * @returns A `Uint8Array` containing a valid TrueType (.ttf) font.
+ * @returns A `Uint8Array` containing a valid sfnt font: TrueType, or OpenType/CFF (`OTTO`).
  */
 export function decompressEotFont(
 	fontData: Uint8Array,

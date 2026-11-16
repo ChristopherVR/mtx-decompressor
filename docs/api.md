@@ -2,7 +2,7 @@
 
 ## `eotToTtf(eotBytes, options?)`
 
-Parses a raw EOT container and returns the reconstructed TrueType binary. Throws `EotError` on a corrupt or truncated container.
+Parses a raw EOT container and returns the reconstructed sfnt font binary (TrueType, or OpenType/CFF with an `OTTO` signature when the outlines are CFF). Throws `EotError` on a corrupt or truncated container.
 
 | Option   | Type                        | Description                          |
 | -------- | --------------------------- | ------------------------------------ |
@@ -22,7 +22,7 @@ Takes an `EotMetadata` and returns whether the `fsType` embedding permissions al
 
 ## `decompressMtx(fontData, options?)`
 
-Decompresses an MTX-compressed font into a TrueType binary.
+Decompresses an MTX-compressed font into an sfnt font binary (TrueType, or OpenType/CFF with an `OTTO` signature when the outlines are CFF).
 
 | Parameter            | Type                         | Description                                                                   |
 | -------------------- | ---------------------------- | ----------------------------------------------------------------------------- |
@@ -30,7 +30,7 @@ Decompresses an MTX-compressed font into a TrueType binary.
 | `options.encrypted`  | `boolean` (default: `false`) | XOR-decrypt with key `0x50` before decompression                              |
 | `options.compressed` | `boolean` (default: `true`)  | If `false`, skip decompression and return the (possibly decrypted) data as-is |
 | `options.onWarn`     | `(message: string) => void`  | Called for each non-fatal diagnostic; the font is still produced              |
-| **Returns**          | `Uint8Array`                 | A TrueType (.ttf) font binary                                                 |
+| **Returns**          | `Uint8Array`                 | A font binary (.ttf, or .otf for CFF)                                           |
 
 ## `decompressEotFont(fontData, compressed, encrypted)`
 
